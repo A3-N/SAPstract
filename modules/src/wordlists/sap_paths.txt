@@ -1,6 +1,3 @@
-BOE
-BOE/BI
-BOE/CMC
 AdapterFramework/version/version.jsp
 AdminTools/
 Adobe
@@ -35,6 +32,9 @@ BizcCommLayerAuthoring/Config1
 BizcCommLayerAuthoring/Config1?wsdl
 BizcCommLayerAuthoring/Config?wsdl
 BizcCommLayerUtilities/Config1
+BOE
+BOE/BI
+BOE/CMC
 bwtest
 caf
 CAFDataService/Config
@@ -47,6 +47,7 @@ CMSRTS/Config?wsdl
 com~tc~lm~webadmin~httpprovider~web
 CrystalReports/viewrpt.cwr
 ctc
+ctc/ConfigServlet
 ctc/ConfigServlet?param=com.sap.ctc.util.UserConfig;CREATEUSER;USERNAME=blabla,PASSWORD=blabla
 ctc/servlet/com.sap.ctc.util.ConfigServlet?param=com.sap.ctc.util.FileSystemConfig;EXECUTE_CMD;CMDLINE=ifconfig
 ctc/servlet/com.sap.ctc.util.ConfigServlet?param=com.sap.ctc.util.FileSystemConfig;EXECUTE_CMD;CMDLINE=ipconfig%20/all
@@ -265,6 +266,7 @@ sap/bc/bsp/sap/crm_bsp_listper
 sap/bc/bsp/sap/crm_bsp_lst_prt
 sap/bc/bsp/sap/crm_bsp_xbab_fr
 sap/bc/bsp/sap/crm_bsp_xbab_pa
+sap/bc/bsp/sap/crmcmp_bpident
 sap/bc/bsp/sap/crmcmp_bpident/
 sap/bc/bsp/sap/crmcmp_brfcase
 sap/bc/bsp/sap/crmcmp_hdr
@@ -309,6 +311,7 @@ sap/bc/bsp/sap/iccmp_bp_cnfirm
 sap/bc/bsp/sap/iccmp_hdr_cntnr
 sap/bc/bsp/sap/iccmp_hdr_cntnt
 sap/bc/bsp/sap/iccmp_header
+sap/bc/bsp/sap/iccmp_ssc_ll
 sap/bc/bsp/sap/iccmp_ssc_ll/
 sap/bc/bsp/sap/icf
 sap/bc/bsp/sap/icf_notify_poll
