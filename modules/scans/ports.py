@@ -1,0 +1,132 @@
+import socket
+import threading
+import queue
+import sqlite3
+from pathlib import Path
+
+from modules.ui import info, success, warn, fail, plain
+from scans.ports_label import build_port_labels
+
+SESSION_DB = Path(__file__).parent.parent.parent / "db" / "sapstract_sessions.db"
+PORT_LABELS = build_port_labels()
+
+def run(args, set_session, current_session):
+    if not current_session:
+        fail("No session active.")
+        return
+
+    if args:
+        fail("Usage: scan ports")
+        return
+
+    targets = fetch_targets(current_session)
+    if not targets:
+        fail("No targets found for this session.")
+        return
+
+    ports = sorted(PORT_LABELS.keys())
+
+    info(f"Selecting all target(s) from session {current_session} for port scan")
+    info(f"SAP Port Scan: {len(ports)} will be scanned")
+
+    for target in targets:
+        success(f"Starting TCP scan for {target} on {len(ports)} ports...")
+
+        results = tcp_scan(target, ports, max_threads=50)
+
+        if results["open"]:
+            success("Open Ports:")
+            for p in results["open"]:
+                label = PORT_LABELS.get(p, "")
+                plain(f"    {p:<5} {label or '-'}")
+        else:
+            fail("No open ports found.")
+
+        if results["filtered"]:
+            warn(f"Filtered Ports : {len(results['filtered'])}")
+        if results["closed"]:
+            fail(f"Closed Ports   : {len(results['closed'])}")
+
+        info("Storing results to database...")
+        store_results(current_session, target, results)
+
+def fetch_targets(session_name):
+    with sqlite3.connect(SESSION_DB) as conn:
+        c = conn.cursor()
+        c.execute("SELECT target FROM targets WHERE session_name = ?", (session_name,))
+        return [row[0] for row in c.fetchall()]
+
+def store_results(session_name, target, results):
+    with sqlite3.connect(SESSION_DB) as conn:
+        c = conn.cursor()
+        for state in ["open", "closed", "filtered"]:
+            for port in results[state]:
+                label = PORT_LABELS.get(port, "")
+                c.execute("""
+                    INSERT OR REPLACE INTO ports (session_name, target, port, status, label)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (session_name, target, port, state.upper(), label))
+        conn.commit()
+
+def tcp_scan(ip, ports, max_threads=30, timeout=2):
+    task_queue = queue.Queue()
+    result_queue = queue.Queue()
+
+    for port in ports:
+        task_queue.put((ip, port))
+
+    threads = [
+        PortScanner(task_queue, result_queue, timeout)
+        for _ in range(max_threads)
+    ]
+
+    for t in threads:
+        t.start()
+
+    results = {}
+    for _ in ports:
+        host, port, status = result_queue.get()
+        results[port] = status
+
+    open_ports = sorted([p for p, s in results.items() if s == "OPEN"])
+    closed_ports = sorted([p for p, s in results.items() if s == "CLOSED"])
+    filtered_ports = sorted([p for p, s in results.items() if s == "FILTERED"])
+
+    return {"open": open_ports, "closed": closed_ports, "filtered": filtered_ports}
+
+class PortScanner(threading.Thread):
+    def __init__(self, inq, outq, timeout=2):
+        super().__init__()
+        self.inq = inq
+        self.outq = outq
+        self.timeout = timeout
+        self.daemon = True
+
+    def run(self):
+        while not self.inq.empty():
+            try:
+                host, port = self.inq.get_nowait()
+                status = self.scan(host, port)
+                self.outq.put((host, port, status))
+                self.inq.task_done()
+            except queue.Empty:
+                break
+
+    def scan(self, host, port):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(self.timeout)
+                s.connect((host, port))
+            return "OPEN"
+        except socket.timeout:
+            return "FILTERED"
+        except (ConnectionRefusedError, OSError):
+            return "CLOSED"
+        except Exception:
+            return "FILTERED"
+
+def complete(args_so_far):
+    if len(args_so_far) == 0:
+        return []
+    return []
+
