@@ -29,7 +29,6 @@ def run(args, set_session, current_session):
         fail(f"Unknown scan subcommand: {subcmd}")
         return
 
-    # Import the corresponding subcommand module dynamically
     try:
         module_name = SUBCOMMANDS[subcmd]
         mod = __import__(f"scans.{module_name}", fromlist=["run"])

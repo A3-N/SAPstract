@@ -45,8 +45,19 @@ def init_db():
             UNIQUE(session_name, target, port)
         )
         """)
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS paths (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_name TEXT NOT NULL,
+            target TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            scheme TEXT NOT NULL,
+            path TEXT NOT NULL,
+            status_code INTEGER NOT NULL,
+            UNIQUE(session_name, target, port, path)
+        )
+        """)
         conn.commit()
-
 
 def load_modules():
     sys.path.insert(0, str(MODULES_DIR))
@@ -113,13 +124,23 @@ def main():
     load_modules()
     setup_autocomplete()
 
-    print(colored("""
-    SAPPAS
-    """, "green"))
+    print("""\033[94m
+     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\033[97m.dBBBBP dBBBBBBP dBBBBBb dBBBBBb     dBBBP dBBBBBBP\033[94m
+     @@@@#+-     .=+*%@@@@@*:::::=@@@@@*:::::::-==+*%@@@@@@@@@@@@@@@@ \033[97m.BP                   dBP      BB\033[94m                       
+     @@+              *@@@%       =@@@@+              +@@@@@@@@@@@@   \033[97m`BBBBb   dBP     dBBBBK   dBP BB   dBP      dBP\033[94m    
+     @=      .::     %@@@@         +@@@+               :@@@@@@@@@@       \033[97mdBP  dBP     dBP  BB  dBP  BB  dBP      dBP\033[94m
+     @      @@@@@@@@@@@@@-          %@@+     +@@@%-     +@@@@@@     \033[97mdBBBBP'  dBP     dBP  dB' dBBBBBBB dBBBBP   dBP\033[94m 
+     @.       :*%@@@@@@@+     =     =@@+     +@@@@=     +@@@@      \033[97m-----------------------------------------------------\033[94m     
+     @%:           =*@@#     -%=     +@+     :+++:      %@@@        \033[97mTool: SAPstract  — SAP enumeration & fuzzing toolkit\033[94m
+     @@@#+           :*:     *@@      #+               #@@          \033[97mBy:   @A3-N      — github.com/A3-N/SAPstract\033[94m     
+     @@@@@@@%#+.             +#*:     -+            =#@@            \033[97mCred: Bizsploit  — Mariano Nuñez Di Croce\033[94m
+     @@%*@@@@@@@-                      .     +@@@@@@@@                    \033[97mMetasploit — rapid7\033[94m
+     @%.                                     +@@@@@@                      \033[97mpysap      — OWASP\033[94m 
+     @-                   -@@%%%@@+          +@@@@                          
+     @@@#+=-. .-=@@@@@@@@@@@@@@@@@+=@@@#@@@@@@@@                    
+     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                          \033[97mDeveloped during live SAP assessments\033[94m
+    """)
 
-    print(colored("Welcome to SAPstract. Type 'help' for options.\n", "yellow"))
-
-    # Handle one-off command
     if len(sys.argv) > 1:
         base_cmd = sys.argv[1]
         args = sys.argv[2:]

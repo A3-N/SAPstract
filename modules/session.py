@@ -1,11 +1,12 @@
 import sqlite3
 from pathlib import Path
+from modules.ui import info, success, warn, fail, plain
 
 SESSION_DB = Path(__file__).parent.parent / "db" / "sapstract_sessions.db"
 
 def run(args, set_session, current_session):
     if not args:
-        print("[!] Usage: session start|set|delete|list <name?>")
+        fail("Usage: session start|set|delete|list <name?>")
         return
 
     cmd = args[0]
@@ -14,12 +15,17 @@ def run(args, set_session, current_session):
         with sqlite3.connect(SESSION_DB) as conn:
             c = conn.cursor()
             c.execute("SELECT name, created_at FROM sessions")
-            for row in c.fetchall():
-                print(f" - {row[0]} (created {row[1]})")
+            rows = c.fetchall()
+            if not rows:
+                warn("No sessions found.")
+                return
+            info("Available sessions:")
+            for row in rows:
+                plain(f"  - {row[0]} (created {row[1]})")
 
     elif cmd == "start":
         if len(args) < 2:
-            print("[!] Usage: session start <name>")
+            fail("Usage: session start <name>")
             return
         name = args[1]
         with sqlite3.connect(SESSION_DB) as conn:
@@ -28,14 +34,14 @@ def run(args, set_session, current_session):
             if c.fetchone() is None:
                 c.execute("INSERT INTO sessions (name) VALUES (?)", (name,))
                 conn.commit()
-                print(f"[*] Created and started session '{name}'")
+                success(f"Created and started session '{name}'")
             else:
-                print(f"[*] Resuming session '{name}'")
+                info(f"Resuming session '{name}'")
         set_session(name)
 
     elif cmd == "set":
         if len(args) < 2:
-            print("[!] Usage: session set <name>")
+            fail("Usage: session set <name>")
             return
         name = args[1]
         with sqlite3.connect(SESSION_DB) as conn:
@@ -43,13 +49,13 @@ def run(args, set_session, current_session):
             c.execute("SELECT name FROM sessions WHERE name = ?", (name,))
             if c.fetchone():
                 set_session(name)
-                print(f"[*] Switched to session '{name}'")
+                success(f"Switched to session '{name}'")
             else:
-                print(f"[!] Session '{name}' does not exist. Use 'session start <name>' to create it.")
+                warn(f"Session '{name}' does not exist. Use 'session start <name>' to create it.")
 
     elif cmd == "delete":
         if len(args) < 2:
-            print("[!] Usage: session delete <name>")
+            fail("Usage: session delete <name>")
             return
         name = args[1]
         with sqlite3.connect(SESSION_DB) as conn:
@@ -58,10 +64,10 @@ def run(args, set_session, current_session):
             conn.commit()
         if current_session == name:
             set_session(None)
-        print(f"[*] Deleted session '{name}'")
+        success(f"Deleted session '{name}'")
 
     else:
-        print("[!] Unknown subcommand. Use: start, set, delete, list")
+        fail("Unknown subcommand. Use: start, set, delete, list")
 
 def complete(args_so_far):
     subcommands = ["start", "set", "delete", "list"]
