@@ -84,7 +84,7 @@ def init_db():
             metadata TEXT,
             UNIQUE(session_name, target, port, sap_label)
         )
-        """)
+        """)# this db is not being used, but im keeping it as a reminder to use it one day lol
         conn.commit()
 
 def load_modules():

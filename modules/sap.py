@@ -20,7 +20,8 @@ SESSION_DB = Path(__file__).parent.parent / "db" / "sapstract_sessions.db"
 
 # Hardcoded SAP subcommands and their corresponding docs modules
 SUBCOMMANDS = {
-    "wiki": "wiki"
+    "wiki": "wiki",
+    "manual": "manual"
 }
 
 def run(args, set_session, current_session):

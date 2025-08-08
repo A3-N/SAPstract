@@ -1,0 +1,76 @@
+{
+  "title": "SAP Clients and SIDs",
+  "description": "This guide explains the difference between SAP Clients and System IDs (SIDs), their purposes, and how they relate in SAP environments.",
+  "Client vs SID": {
+    "SID (System ID)": "A unique three-character identifier representing an entire SAP system instance (e.g., 'PRD', 'DEV', 'QAS'). Each SID refers to a complete SAP environment including DB, app server, and central instance.",
+    "Client": "A three-digit logical partition within an SAP SID. Clients isolate user data, configs, and workflows. Multiple clients can run in the same SID without affecting each other."
+  },
+  "How They Relate": "Each SAP SID (e.g., 'DEV') can have multiple clients like 000, 001, 066, etc. These clients are essentially separate environments within the same system, often used for different purposes like administration, testing, and productive business operations.",
+  "Common Clients and Their Roles": [
+    {
+      "Client": "000",
+      "Role": "Master Client",
+      "Purpose": "Default SAP configuration and system data. Used during installation and as a baseline for copying new clients."
+    },
+    {
+      "Client": "001",
+      "Role": "Copy Template",
+      "Purpose": "Contains a standard configuration and demo data. Often used to create new clients by copying from 001."
+    },
+    {
+      "Client": "066",
+      "Role": "EarlyWatch Client",
+      "Purpose": "Used by SAP for remote diagnostics and system health checks via SAP EarlyWatch services."
+    },
+    {
+      "Client": "800",
+      "Role": "Training / Demo",
+      "Purpose": "Typically used for training or sandbox environments with demo data. Not always present."
+    },
+    {
+      "Client": "200",
+      "Role": "Test / QA",
+      "Purpose": "Used for internal testing or quality assurance. May hold less critical data."
+    }
+  ],
+  "Important Notes": [
+    "Clients provide security isolation — users in one client can't access another unless explicitly allowed.",
+    "User accounts, roles, data, and configuration are all client-specific.",
+    "Some default users (like SAP*, DDIC) exist in multiple clients but may have different passwords per client.",
+    "SIDs define the landscape (like DEV → QAS → PRD), while clients define logical usage zones inside a system."
+  ],
+  "Additional SID Details": {
+    "Examples": {
+      "DEV": "Development system.",
+      "QAS": "Quality assurance/test system.",
+      "PRD": "Production system.",
+      "TST": "Temporary testing system.",
+      "SBX": "Sandbox.",
+      "D01/Q01/P01": "Alternative SID formats depending on naming standards."
+    },
+    "Usage": "The SID is part of SAP's system-level configuration and affects directory names, environment variables, and system processes.",
+    "Restrictions": "SIDs must be 3 uppercase letters (A–Z), no numbers or special characters."
+  },
+  "Typical Ranges": {
+    "000": "SAP system client — used for installation, maintenance, and contains SAP* and DDIC.",
+    "001": "Copy/reference client — base for creating other clients.",
+    "066": "EarlyWatch client — used by SAP support tools.",
+    "100–199": "Development clients.",
+    "200–299": "QA or staging environments.",
+    "300–399": "Training or sandbox systems.",
+    "800–899": "Demo/public clients such as IDES."
+  },
+  "Landscape Structure": {
+    "Definition": "An SAP landscape is the overall layout of SAP systems (e.g. DEV → QAS → PRD), typically separated by SIDs and clients.",
+    "Purpose": "Segregates development, testing, and production to ensure safe change deployment.",
+    "Example": "DEV [SID: DEV, Client: 100], QAS [SID: QAS, Client: 200], PRD [SID: PRD, Client: 300]"
+  },
+  "Security Notes": [
+    "TMSADM in client 000 is a common pivot point.",
+    "Insecure RFC trust between systems or clients may allow lateral movement.",
+    "Weak or reused passwords across clients are commonly exploited.",
+    "It's common to find SAP* and DDIC accounts active in clients 000 and 001.",
+    "Client 066 is often overlooked and used by attackers for post-exploitation persistence."
+  ]
+}
+

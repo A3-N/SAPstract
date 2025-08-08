@@ -1,0 +1,122 @@
+{
+  "title": "Common SAP Default Users and Passwords",
+  "description": "A list of typical default SAP users, their known default passwords, and the clients in which they are most commonly found.",
+  "users": [
+    {
+      "User": "SAP*",
+      "Passwords": "06071992, PASS",
+      "Typical Clients": "000, 001, 066"
+    },
+    {
+      "User": "DDIC",
+      "Passwords": "19920706, Welcome01",
+      "Typical Clients": "000, 001"
+    },
+    {
+      "User": "SAPCPIC",
+      "Passwords": "ADMIN",
+      "Typical Clients": "000"
+    },
+    {
+      "User": "EARLYWATCH",
+      "Passwords": "SUPPORT",
+      "Typical Clients": "066"
+    },
+    {
+      "User": "TMSADM",
+      "Passwords": "PASSWORD, ADMIN, $1Pawd2&",
+      "Typical Clients": "000"
+    },
+    {
+      "User": "ADMIN",
+      "Passwords": "welcome",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "ADSUSER",
+      "Passwords": "ch4ngeme",
+      "Typical Clients": "000"
+    },
+    {
+      "User": "ADS_AGENT",
+      "Passwords": "ch4ngeme",
+      "Typical Clients": "000"
+    },
+    {
+      "User": "DEVELOPER",
+      "Passwords": "ch4ngeme",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "J2EE_ADMIN",
+      "Passwords": "ch4ngeme",
+      "Typical Clients": "000"
+    },
+    {
+      "User": "SAPJSF",
+      "Passwords": "ch4ngeme",
+      "Typical Clients": "000"
+    },
+    {
+      "User": "SAPR3",
+      "Passwords": "SAP",
+      "Typical Clients": "000"
+    },
+    {
+      "User": "CTB_ADMIN",
+      "Passwords": "sap123",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "XMI_DEMO",
+      "Passwords": "sap123",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "IDEADM",
+      "Passwords": "admin",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "SMD_ADMIN",
+      "Passwords": "init1234",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "SMD_BI_RFC",
+      "Passwords": "init1234",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "SMD_RFC",
+      "Passwords": "init1234",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "SOLMAN_ADMIN",
+      "Passwords": "init1234",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "SOLMAN_BTC",
+      "Passwords": "init1234",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "SAPSUPPORT",
+      "Passwords": "init1234",
+      "Typical Clients": "066"
+    },
+    {
+      "User": "CONTENTSERV",
+      "Passwords": "init1234",
+      "Typical Clients": "001"
+    },
+    {
+      "User": "SMD_AGT",
+      "Passwords": "init1234",
+      "Typical Clients": "001"
+    }
+  ]
+}
+
