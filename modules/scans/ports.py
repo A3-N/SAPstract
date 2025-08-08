@@ -21,14 +21,13 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from scans.ports_label import build_port_labels
+    from src.ports_label import build_port_labels
 except ImportError as e:
     print(f"[!] Failed to import port label logic: {e}")
     sys.exit(1)
 
 SESSION_DB = Path(__file__).parent.parent.parent / "db" / "sapstract_sessions.db"
 PORT_LABELS = build_port_labels()
-
 
 def run(args, set_session, current_session):
     if not current_session:

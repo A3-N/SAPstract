@@ -22,7 +22,7 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from scans.ports_label import build_port_labels
+    from src.ports_label import build_port_labels
 except ImportError as e:
     print(f"[!] Failed to load port label logic: {e}")
     sys.exit(1)
