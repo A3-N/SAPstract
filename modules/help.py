@@ -1,4 +1,21 @@
-from termcolor import colored
+import os
+import sys
+
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' is required for colored output on Windows.")
+        print("    Run: pip install colorama")
+        sys.exit(1)
+
+try:
+    from termcolor import colored
+except ImportError:
+    print("[!] 'termcolor' is required. Run: pip install termcolor")
+    sys.exit(1)
+
 
 def run(args, set_session, current_session):
     def section(title, rows):

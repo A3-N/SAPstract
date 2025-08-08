@@ -1,17 +1,33 @@
-from collections import defaultdict
-from queue import Queue
-from threading import Thread
+import os
+import sys
 import time
 import sqlite3
 import requests
 from pathlib import Path
-from modules.ui import info, success, warn, fail, plain
+from threading import Thread
+from queue import Queue
+from collections import defaultdict
+
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' is required on Windows for color output. Run: pip install colorama")
+        sys.exit(1)
+
+try:
+    from modules.ui import info, success, warn, fail, plain
+except ImportError as e:
+    print(f"[!] Failed to import UI module: {e}")
+    sys.exit(1)
 
 WORDLIST_DIR = Path(__file__).parent.parent / "src" / "wordlists"
 SESSION_DB = Path(__file__).parent.parent.parent / "db" / "sapstract_sessions.db"
 TIMEOUT = 5
 HOST_PAD = 15
 PORT_PAD = 6
+
 
 def parse_fuzz_args(args):
     config = {
@@ -44,7 +60,6 @@ def run(args, set_session, current_session):
         fail("No session active.")
         return
 
-    # Based on MetaSploit data/wordlist
     wordlist_file = WORDLIST_DIR / "sap_paths.txt"
     if not wordlist_file.exists():
         fail("Wordlist 'sap_paths.txt' not found in modules/src/wordlists/")

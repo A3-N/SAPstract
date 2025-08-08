@@ -1,11 +1,30 @@
+import os
+import sys
 import socket
 import threading
 import queue
 import sqlite3
 from pathlib import Path
 
-from modules.ui import info, success, warn, fail, plain
-from scans.ports_label import build_port_labels
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' is required for Windows terminal support. Run: pip install colorama")
+        sys.exit(1)
+
+try:
+    from modules.ui import info, success, warn, fail, plain
+except ImportError as e:
+    print(f"[!] Failed to import UI module: {e}")
+    sys.exit(1)
+
+try:
+    from scans.ports_label import build_port_labels
+except ImportError as e:
+    print(f"[!] Failed to import port label logic: {e}")
+    sys.exit(1)
 
 SESSION_DB = Path(__file__).parent.parent.parent / "db" / "sapstract_sessions.db"
 PORT_LABELS = build_port_labels()
@@ -36,9 +55,8 @@ def run(args, set_session, current_session):
             continue
 
         success(f"Starting TCP scan for {target} on {len(ports)} ports...")
-        #results = tcp_scan(target, ports, max_threads=50)
-        # TEMP THREADS FOR TESTING
         results = tcp_scan(target, ports, max_threads=5)
+
         if not results["open"]:
             fail("No open ports found.")
 
@@ -70,16 +88,12 @@ def store_results(session_name, target, results):
                 """, (session_name, target, port, state.upper(), label))
         conn.commit()
 
-
-import socket
-
 def is_host_reachable(ip):
     try:
         socket.gethostbyname(ip)
-
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(2)
-            s.connect_ex((ip, 1))  
+            s.connect_ex((ip, 1))
         return True
     except socket.gaierror:
         return False

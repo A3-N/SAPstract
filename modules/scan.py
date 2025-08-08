@@ -1,11 +1,31 @@
+import os
+import sys
 import socket
 import threading
 import queue
 import sqlite3
 from pathlib import Path
 import importlib.util
-from modules.ui import info, success, warn, fail, plain
-from scans.ports_label import build_port_labels
+
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' is required for Windows terminal support. Run: pip install colorama")
+        sys.exit(1)
+
+try:
+    from modules.ui import info, success, warn, fail, plain
+except ImportError as e:
+    print(f"[!] Failed to import UI module: {e}")
+    sys.exit(1)
+
+try:
+    from scans.ports_label import build_port_labels
+except ImportError as e:
+    print(f"[!] Failed to load port label logic: {e}")
+    sys.exit(1)
 
 SESSION_DB = Path(__file__).parent.parent / "db" / "sapstract_sessions.db"
 

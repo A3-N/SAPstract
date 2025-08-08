@@ -1,6 +1,21 @@
+import os
+import sys
 import sqlite3
 from pathlib import Path
-from modules.ui import info, success, warn, fail, plain
+
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' is required on Windows for color support. Run: pip install colorama")
+        sys.exit(1)
+
+try:
+    from modules.ui import info, success, warn, fail, plain
+except ImportError as e:
+    print(f"[!] Failed to import UI module: {e}")
+    sys.exit(1)
 
 SESSION_DB = Path(__file__).parent.parent / "db" / "sapstract_sessions.db"
 
@@ -76,7 +91,11 @@ def complete(args_so_far):
     elif len(args_so_far) == 1:
         return [cmd for cmd in subcommands if cmd.startswith(args_so_far[0])]
     elif args_so_far[0] == "delete":
-        from __main__ import CURRENT_SESSION  
+        try:
+            from __main__ import CURRENT_SESSION
+        except ImportError:
+            return []
+
         with sqlite3.connect(SESSION_DB) as conn:
             c = conn.cursor()
             try:

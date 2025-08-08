@@ -1,7 +1,20 @@
+import os
+import sys
+
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' is required for Windows color support. Run: pip install colorama")
+        sys.exit(1)
+
 def get_nn_ports(port_pattern, exclude=None):
     """
-    Example: '32NN' -> 3200 to 3299
-             '5NN01' -> 50001, 51001, ..., 59001
+    Convert a port pattern like '32NN' or '5NN01' to a list of actual ports.
+    Example:
+        '32NN'   -> 3200 to 3299
+        '5NN01'  -> 50001, 51001, ..., 59001
     """
     exclude = exclude or []
     if 'NN' not in port_pattern:
@@ -11,18 +24,17 @@ def get_nn_ports(port_pattern, exclude=None):
     prefix, suffix = parts[0], parts[1]
     return [
         int(f"{prefix}{i:02}{suffix}")
-        for i in range(0, 100)
+        for i in range(100)
         if int(f"{prefix}{i:02}{suffix}") not in exclude
     ]
+
 
 def build_port_labels():
     port_labels = {}
 
-    # Reverse proxy
     port_labels[80] = "HTTP"
     port_labels[443] = "HTTPS"
 
-    # Netweaver ABAP + ICM
     for i in get_nn_ports("32NN", [3299]): port_labels[i] = "SAP Dispatcher"
     for i in get_nn_ports("33NN", [3389]): port_labels[i] = "SAP Gateway"
     for i in get_nn_ports("48NN"): port_labels[i] = "SAP Secure Gateway"
@@ -91,5 +103,4 @@ def build_port_labels():
     })
 
     return port_labels
-
 #CREDITS TO BIZSPLOIT

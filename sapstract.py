@@ -1,11 +1,34 @@
-import sqlite3
 import os
 import sys
-import readline
-from pathlib import Path
+import sqlite3
 import importlib.util
+from pathlib import Path
+
+try:
+    import readline
+except ImportError:
+    if os.name == 'nt':
+        try:
+            import pyreadline3 as readline
+        except ImportError:
+            print("[!] Windows requires 'pyreadline3'. Run: pip install pyreadline3")
+            sys.exit(1)
+    else:
+        raise
+
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' required for colored output. Run: pip install colorama")
+        sys.exit(1)
+
 from termcolor import colored
 from modules.ui import info, success, warn, fail, plain
+
+if os.name == 'nt':
+    os.system("chcp 65001 >NUL")
 
 ROOT_DIR = Path(__file__).parent.resolve()
 DB_DIR = ROOT_DIR / "db"
