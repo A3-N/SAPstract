@@ -1,7 +1,22 @@
 import os
+import sys
 import json
 from pathlib import Path
-from modules.ui import info, success, warn, fail, plain
+
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' is required for Windows terminal support. Run: pip install colorama")
+        sys.exit(1)
+
+try:
+    from modules.ui import info, success, warn, fail, plain
+except ImportError as e:
+    print(f"[!] Failed to import UI module: {e}")
+    sys.exit(1)
+
 
 def run(args, set_session=None, current_session=None):
     if not args:
@@ -94,6 +109,7 @@ def run(args, set_session=None, current_session=None):
                 plain(f"  {line}")
         plain("")
     plain("-" * 60)
+
 
 def complete(args_so_far):
     return []

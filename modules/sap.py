@@ -1,4 +1,14 @@
+import os
 import sys
+from pathlib import Path
+
+try:
+    import colorama
+    colorama.init()
+except ImportError:
+    if os.name == 'nt':
+        print("[!] 'colorama' is required for Windows terminal support. Run: pip install colorama")
+        sys.exit(1)
 
 try:
     from modules.ui import info, success, warn, fail, plain
@@ -6,7 +16,9 @@ except ImportError as e:
     print(f"[!] Failed to import UI module: {e}")
     sys.exit(1)
 
-# Add more subcommands here as needed
+SESSION_DB = Path(__file__).parent.parent / "db" / "sapstract_sessions.db"
+
+# Hardcoded SAP subcommands and their corresponding docs modules
 SUBCOMMANDS = {
     "wiki": "wiki"
 }

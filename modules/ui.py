@@ -18,7 +18,7 @@ except ImportError:
 
 
 def info(msg):
-    print(f"{colored('[*]', 'cyan')} {msg}")
+    print(f"{colored('[*]', 'blue')} {msg}")
 
 
 def success(msg):

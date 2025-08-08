@@ -2,6 +2,7 @@ import os
 import sys
 import sqlite3
 import importlib.util
+from termcolor import colored
 from pathlib import Path
 
 try:
@@ -100,11 +101,12 @@ def set_current_session(name):
     global CURRENT_SESSION
     CURRENT_SESSION = name
 
-
 def get_prompt():
+    sap = colored("SAP", "blue")
+    stract = colored("stract", "white")
     if CURRENT_SESSION:
-        return colored(f"sabstract ({CURRENT_SESSION}) > ", "cyan")
-    return colored("sabstract > ", "cyan")
+        return f"{sap}{stract} ({CURRENT_SESSION}) > "
+    return f"{sap}{stract} > "
 
 
 def fetch_session_names():
