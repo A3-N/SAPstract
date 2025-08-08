@@ -55,7 +55,7 @@ def run(args, set_session, current_session):
             continue
 
         success(f"Starting TCP scan for {target} on {len(ports)} ports...")
-        results = tcp_scan(target, ports, max_threads=5)
+        results = tcp_scan(target, ports, max_threads=50)
 
         if not results["open"]:
             fail("No open ports found.")

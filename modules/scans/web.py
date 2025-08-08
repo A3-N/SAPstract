@@ -3,10 +3,13 @@ import sys
 import time
 import sqlite3
 import requests
+import urllib3
 from pathlib import Path
-from threading import Thread
+from threading import Thread, Lock
 from queue import Queue
 from collections import defaultdict
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 try:
     import colorama
@@ -28,6 +31,8 @@ TIMEOUT = 5
 HOST_PAD = 15
 PORT_PAD = 6
 
+# Thread lock to prevent concurrent SQLite writes
+db_lock = Lock()
 
 def parse_fuzz_args(args):
     config = {
@@ -130,14 +135,15 @@ def run(args, set_session, current_session):
 
                     log(f"{target}:{port:<5} {code} - {path}")
 
-                with sqlite3.connect(SESSION_DB) as conn:
-                    c = conn.cursor()
-                    c.execute("""
-                        INSERT OR IGNORE INTO paths (
-                            session_name, target, port, scheme, path, status_code
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                    """, (current_session, target, port, scheme, path, code))
-                    conn.commit()
+                with db_lock:
+                    with sqlite3.connect(SESSION_DB) as conn:
+                        c = conn.cursor()
+                        c.execute("""
+                            INSERT OR IGNORE INTO paths (
+                                session_name, target, port, scheme, path, status_code
+                            ) VALUES (?, ?, ?, ?, ?, ?)
+                        """, (current_session, target, port, scheme, path, code))
+                        conn.commit()
 
             except requests.RequestException as e:
                 fail(f"ERR - {path} ({str(e).split(':')[0]})")

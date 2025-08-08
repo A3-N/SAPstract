@@ -32,7 +32,7 @@ SESSION_DB = Path(__file__).parent.parent / "db" / "sapstract_sessions.db"
 # Hardcoded scan subcommands and their corresponding modules
 SUBCOMMANDS = {
     "ports": "ports",
-    "fuzz": "fuzz"
+    "web": "web"
 }
 
 def run(args, set_session, current_session):
