@@ -70,17 +70,18 @@ def init_db():
         )
         """)
         c.execute("""
-        CREATE TABLE IF NOT EXISTS paths (
+        CREATE TABLE IF NOT EXISTS sap_http_services (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_name TEXT NOT NULL,
             target TEXT NOT NULL,
             port INTEGER NOT NULL,
             scheme TEXT NOT NULL,
-            path TEXT NOT NULL,
-            status_code INTEGER NOT NULL,
-            content_length INTEGER,
-            content_type TEXT,
-            UNIQUE(session_name, target, port, path)
+            sap_label TEXT NOT NULL,
+            sap_type TEXT,
+            service_name TEXT,
+            paths TEXT,
+            metadata TEXT,
+            UNIQUE(session_name, target, port, sap_label)
         )
         """)
         conn.commit()
@@ -164,7 +165,7 @@ def main():
      @%.                                     +@@@@@@                      \033[97mpysap      — OWASP\033[94m 
      @-                   -@@%%%@@+          +@@@@                          
      @@@#+=-. .-=@@@@@@@@@@@@@@@@@+=@@@#@@@@@@@@                    
-     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                          \033[97mDeveloped during live SAP assessments\033[94m
+     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                          \033[97mDeveloped while doing ur mom, loser\033[94m
     """)
 
     if len(sys.argv) > 1:
