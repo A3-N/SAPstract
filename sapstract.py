@@ -5,6 +5,7 @@ import readline
 from pathlib import Path
 import importlib.util
 from termcolor import colored
+from modules.ui import info, success, warn, fail, plain
 
 ROOT_DIR = Path(__file__).parent.resolve()
 DB_DIR = ROOT_DIR / "db"
@@ -147,7 +148,8 @@ def main():
         if base_cmd in LOADED_COMMANDS:
             LOADED_COMMANDS[base_cmd].run(args, set_current_session, CURRENT_SESSION)
         elif base_cmd == "exit":
-            print("[*] Bye.")
+            os.system("cls" if os.name == "nt" else "clear")
+            info("Bye.")
         else:
             print(f"[!] Unknown command '{base_cmd}'. Type 'help'.")
         return
@@ -164,13 +166,16 @@ def main():
             if base_cmd in LOADED_COMMANDS:
                 LOADED_COMMANDS[base_cmd].run(args[1:], set_current_session, CURRENT_SESSION)
             elif base_cmd == "exit":
-                print("[*] Bye.")
+                os.system("cls" if os.name == "nt" else "clear")
+                info("Bye.")
                 break
             else:
                 print(colored(f"[!] Unknown command '{base_cmd}'. Type 'help'.", "red"))
 
         except KeyboardInterrupt:
-            print("\n[*] Bye.")
+            os.system("cls" if os.name == "nt" else "clear")
+            print("")
+            info("Bye.")
             break
 
 

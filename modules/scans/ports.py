@@ -10,6 +10,7 @@ from scans.ports_label import build_port_labels
 SESSION_DB = Path(__file__).parent.parent.parent / "db" / "sapstract_sessions.db"
 PORT_LABELS = build_port_labels()
 
+
 def run(args, set_session, current_session):
     if not current_session:
         fail("No session active.")
@@ -30,16 +31,15 @@ def run(args, set_session, current_session):
     info(f"SAP Port Scan: {len(ports)} will be scanned")
 
     for target in targets:
+        if not is_host_reachable(target):
+            warn(f"{target} does not appear reachable. Skipping.")
+            continue
+
         success(f"Starting TCP scan for {target} on {len(ports)} ports...")
-
-        results = tcp_scan(target, ports, max_threads=50)
-
-        if results["open"]:
-            success("Open Ports:")
-            for p in results["open"]:
-                label = PORT_LABELS.get(p, "")
-                plain(f"    {p:<5} {label or '-'}")
-        else:
+        #results = tcp_scan(target, ports, max_threads=50)
+        # TEMP THREADS FOR TESTING
+        results = tcp_scan(target, ports, max_threads=5)
+        if not results["open"]:
             fail("No open ports found.")
 
         if results["filtered"]:
@@ -50,11 +50,13 @@ def run(args, set_session, current_session):
         info("Storing results to database...")
         store_results(current_session, target, results)
 
+
 def fetch_targets(session_name):
     with sqlite3.connect(SESSION_DB) as conn:
         c = conn.cursor()
         c.execute("SELECT target FROM targets WHERE session_name = ?", (session_name,))
         return [row[0] for row in c.fetchall()]
+
 
 def store_results(session_name, target, results):
     with sqlite3.connect(SESSION_DB) as conn:
@@ -68,7 +70,23 @@ def store_results(session_name, target, results):
                 """, (session_name, target, port, state.upper(), label))
         conn.commit()
 
-def tcp_scan(ip, ports, max_threads=30, timeout=2):
+
+import socket
+
+def is_host_reachable(ip):
+    try:
+        socket.gethostbyname(ip)
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(2)
+            s.connect_ex((ip, 1))  
+        return True
+    except socket.gaierror:
+        return False
+    except OSError:
+        return False
+
+def tcp_scan(ip, ports, max_threads=30, timeout=5):
     task_queue = queue.Queue()
     result_queue = queue.Queue()
 
@@ -88,14 +106,19 @@ def tcp_scan(ip, ports, max_threads=30, timeout=2):
         host, port, status = result_queue.get()
         results[port] = status
 
+        if status == "OPEN":
+            label = PORT_LABELS.get(port, "")
+            success(f"    {port:<5} OPEN      {label or '-'}")
+
     open_ports = sorted([p for p, s in results.items() if s == "OPEN"])
     closed_ports = sorted([p for p, s in results.items() if s == "CLOSED"])
     filtered_ports = sorted([p for p, s in results.items() if s == "FILTERED"])
 
     return {"open": open_ports, "closed": closed_ports, "filtered": filtered_ports}
 
+
 class PortScanner(threading.Thread):
-    def __init__(self, inq, outq, timeout=2):
+    def __init__(self, inq, outq, timeout=5):
         super().__init__()
         self.inq = inq
         self.outq = outq
@@ -120,10 +143,17 @@ class PortScanner(threading.Thread):
             return "OPEN"
         except socket.timeout:
             return "FILTERED"
-        except (ConnectionRefusedError, OSError):
+        except ConnectionRefusedError:
             return "CLOSED"
+        except OSError as e:
+            if hasattr(e, 'errno') and e.errno == 113:
+                return "FILTERED"
+            elif hasattr(e, 'errno') and e.errno == 111:
+                return "CLOSED"
+            return "FILTERED"
         except Exception:
             return "FILTERED"
+
 
 def complete(args_so_far):
     if len(args_so_far) == 0:
