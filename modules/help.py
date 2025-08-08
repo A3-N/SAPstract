@@ -26,30 +26,31 @@ def run(args, set_session, current_session):
         print("+" + "-" * 30 + "+" + "-" * 60 + "+")
 
     section("Session Management", [
-        ("session start <name>", "Create a new session or resume if it already exists."),
-        ("session set <name>", "Switch to an existing session for subsequent operations."),
-        ("session list", "Show all saved sessions with creation timestamps."),
-        ("session delete <name>", "Delete a session and its associated targets and results."),
+        ("session start <name>", "Create or resume a session."),
+        ("session set <name>", "Switch to an existing session."),
+        ("session list", "List all saved sessions."),
+        ("session delete <name>", "Delete a session and its data."),
     ])
 
     section("Target Management", [
-        ("target set <host>", "Add a target host/IP to the current session."),
-        ("target list", "Show all targets added to the current session."),
-        ("target delete <host>", "Remove a specific target from the current session."),
+        ("target set <host>", "Add a target host/IP to the session."),
+        ("target list", "List all targets in the current session."),
+        ("target delete <host>", "Remove a target from the session."),
     ])
 
-    section("Scanning & Fuzzing", [
-        ("scan ports", "Scan all session targets for known SAP-related ports."),
-        ("scan fuzz", "Fuzz confirmed SAP web services using a wordlist."),
-        ("scan fuzz threads <n> delay <s> status <codes>", "Custom thread count, delay, and status codes for fuzz."),
+    section("Scanning", [
+        ("scan ports", "Scan session targets for known SAP ports."),
+        ("scan web", "Fingerprint and verify SAP web services."),
     ])
 
-    section("Session Context", [
-        ("set_session(name)", "This is auto-handled. Most commands require a session to be active."),
+    section("SAP Intelligence", [
+        ("sap", "Run SAP-related enumeration commands."),
+        ("sap wiki <term>", "Search and view SAP wiki docs (e.g., port details)."),
+        ("sap manual", "View SAP manual entries (e.g., TCodes, client/SID info)."),
     ])
 
-    section("General Usage", [
-        ("help", "Show this help menu with available commands."),
+    section("General", [
+        ("help", "Display this help menu."),
         ("exit", "Exit the CLI interface."),
     ])
 
