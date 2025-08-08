@@ -35,6 +35,7 @@ def build_port_labels():
     port_labels[80] = "HTTP"
     port_labels[443] = "HTTPS"
 
+    # Netweaver ABAP + ICM
     for i in get_nn_ports("32NN", [3299]): port_labels[i] = "SAP Dispatcher"
     for i in get_nn_ports("33NN", [3389]): port_labels[i] = "SAP Gateway"
     for i in get_nn_ports("48NN"): port_labels[i] = "SAP Secure Gateway"

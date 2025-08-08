@@ -78,6 +78,8 @@ def init_db():
             scheme TEXT NOT NULL,
             path TEXT NOT NULL,
             status_code INTEGER NOT NULL,
+            content_length INTEGER,
+            content_type TEXT,
             UNIQUE(session_name, target, port, path)
         )
         """)
