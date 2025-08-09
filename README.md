@@ -28,8 +28,8 @@ SAP Enum and Exploit
 │   │   ├── 395x_its_http.json
 │   │   ├── 4NN80_igs_admin.json
 │   │   ├── 4239_upgrade_assistant.json
-│   │   ├── 443_https_interface.json
-│   │   ├── 443NN_icm_https.json
+│   │   ├── 443_https_interface.json        # I want to redo the wiki command,
+│   │   ├── 443NN_icm_https.json            # seeing as its redundent to manuals
 │   │   ├── 444NN_msgserver_https.json
 │   │   ├── 5NN00_java_http.json
 │   │   ├── 5NN01_java_https.json
@@ -86,14 +86,14 @@ SAP Enum and Exploit
 
 Add the fuzz.py next and do the below checks while running
 
-BIZSPLOIT VULNS ADD:
-checkCTC
-icmAdmin
-icmErrorInfodisc
-icmInfo
-icmPing
-icmSOAPRFC
-icmWebgui
+#### BIZSPLOIT VULNS ADD:
+- checkCTC
+- icmAdmin
+- icmErrorInfodisc
+- icmInfo
+- icmPing
+- icmSOAPRFC
+- icmWebgui
 
 ---
 
