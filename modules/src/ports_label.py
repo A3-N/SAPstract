@@ -10,12 +10,6 @@ except ImportError:
         sys.exit(1)
 
 def get_nn_ports(port_pattern, exclude=None):
-    """
-    Convert a port pattern like '32NN' or '5NN01' to a list of actual ports.
-    Example:
-        '32NN'   -> 3200 to 3299
-        '5NN01'  -> 50001, 51001, ..., 59001
-    """
     exclude = exclude or []
     if 'NN' not in port_pattern:
         return []
@@ -27,7 +21,6 @@ def get_nn_ports(port_pattern, exclude=None):
         for i in range(100)
         if int(f"{prefix}{i:02}{suffix}") not in exclude
     ]
-
 
 def build_port_labels():
     port_labels = {}
@@ -104,4 +97,5 @@ def build_port_labels():
     })
 
     return port_labels
+
 #CREDITS TO BIZSPLOIT
