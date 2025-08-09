@@ -71,20 +71,39 @@ def init_db():
         )
         """)
         c.execute("""
-        CREATE TABLE IF NOT EXISTS sap_http_services (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_name TEXT NOT NULL,
-            target TEXT NOT NULL,
-            port INTEGER NOT NULL,
-            scheme TEXT NOT NULL,
-            sap_label TEXT NOT NULL,
-            sap_type TEXT,
-            service_name TEXT,
-            paths TEXT,
-            metadata TEXT,
-            UNIQUE(session_name, target, port, sap_label)
+        CREATE TABLE IF NOT EXISTS web_scans (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_name  TEXT NOT NULL,
+            target        TEXT NOT NULL,
+            port          INTEGER NOT NULL,
+            scheme        TEXT NOT NULL,
+            sap_label     TEXT NOT NULL,
+            web_module    TEXT NOT NULL,
+            started_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            finished_at   DATETIME,
+            status        TEXT NOT NULL DEFAULT 'TRIGGERED',
+            notes         TEXT
         )
-        """)# this db is not being used, but im keeping it as a reminder to use it one day lol
+        """)
+        c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_web_scans_lookup
+          ON web_scans(session_name, target, port, sap_label)
+        """)
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS vuln_checks (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id       INTEGER NOT NULL,
+            vuln_module   TEXT NOT NULL,
+            result        TEXT NOT NULL,
+            reason        TEXT,
+            details_json  TEXT,
+            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (scan_id, vuln_module)
+        )
+        """)
+        c.execute("""
+        CREATE INDEX IF NOT EXISTS idx_vuln_checks_scan ON vuln_checks(scan_id)
+        """)
         conn.commit()
 
 def load_modules():

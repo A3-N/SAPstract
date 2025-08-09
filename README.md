@@ -3,33 +3,36 @@ SAP Enum and Exploit
 
 ```
 .
-├── SAPstract.py                # Main entrypoint; automatically loads commands from `modules/`
+├── SAPstract.py
 ├── LICENSE
 ├── README.md
-├── db                          # Database folder (sessions + logs of all gathered info)
-│   └── sapstract_sessions.db   # SQLite DB storing sessions and discovered data
-├── modules                     # All command modules for SAPstract.py (auto-loaded, excluding ui.py)
-│   ├── ui.py                   # UI helper functions (not a command)
-│   ├── scan.py                 # Main `scan` command; loads subcommands from `modules/scans/`
-│   ├── sap.py                  # Main `sap` command; loads docs/commands from `modules/docs/`
-│   ├── target.py               # Command for managing targets in the active session
-│   ├── help.py                 # Help menu command
-│   ├── session.py              # Session management command
-│   ├── exploit.py              # Main `exploit` command; loads subcommands from `modules/exploit/`
-│   ├── scans                   # Subcommands for `scan.py`
-│   │   ├── ports.py            # Performs port scanning for SAP-related ports
-│   │   └── web.py              # Web enumeration logic (calls checks in `modules/src/`)
-│   ├── docs                    # Commands & data used by `sap.py`
-│   │   ├── wiki.py              # `sap wiki` command (searches JSON docs)
-│   │   ├── manual.py            # `sap manual` command (loads m_* JSON manuals)
+├── db/
+│   └── sapstract_sessions.db
+│
+├── modules/
+│   ├── ui.py
+│   ├── scan.py
+│   ├── sap.py
+│   ├── target.py
+│   ├── help.py
+│   ├── session.py
+│   ├── exploit.py
+│   │
+│   ├── scans/
+│   │   ├── ports.py
+│   │   └── web.py
+│   │
+│   ├── docs/
+│   │   ├── manual.py
+│   │   ├── wiki.py
 │   │   ├── 0080_http_generic.json
 │   │   ├── 21212_sapinst.json
 │   │   ├── 21213_sapinst_https.json
 │   │   ├── 395x_its_http.json
 │   │   ├── 4NN80_igs_admin.json
 │   │   ├── 4239_upgrade_assistant.json
-│   │   ├── 443_https_interface.json        # I want to redo the wiki command,
-│   │   ├── 443NN_icm_https.json            # seeing as its redundent to manuals
+│   │   ├── 443_https_interface.json
+│   │   ├── 443NN_icm_https.json
 │   │   ├── 444NN_msgserver_https.json
 │   │   ├── 5NN00_java_http.json
 │   │   ├── 5NN01_java_https.json
@@ -43,7 +46,8 @@ SAP Enum and Exploit
 │   │   ├── m_SAP_Tech_Stack.json
 │   │   ├── m_TCodes.json
 │   │   └── m_TCodes_Attack_Path.json
-│   ├── exploit                 # Subcommands for `exploit.py` (one per SAP service/port)
+│   │
+│   ├── exploit/
 │   │   ├── 80.py
 │   │   ├── 80NN.py
 │   │   ├── 81NN.py
@@ -60,26 +64,35 @@ SAP Enum and Exploit
 │   │   ├── 5NN06.py
 │   │   ├── 5NN19.py
 │   │   └── ITS.py
-│   └── src                     # Sub-checks for `web.py` scan command
-│       ├── 80.py
-│       ├── 80NN.py
-│       ├── 81NN.py
-│       ├── 21212.py
-│       ├── 21213.py
-│       ├── 4NN80.py
-│       ├── 4239.py
-│       ├── 443.py
-│       ├── 443NN.py
-│       ├── 444NN.py
-│       ├── 5NN00.py
-│       ├── 5NN01.py
-│       ├── 5NN05.py
-│       ├── 5NN06.py
-│       ├── 5NN19.py
-│       ├── ITS.py
-│       ├── ports_label.py       # Mapping of SAP ports to their service labels
-│       └── wordlists
-│           └── sap_paths.txt    # Misc wordlist for path enumeration
+│   │
+│   └── src/
+│       ├── ports_label.py
+│       │
+│       ├── wordlists/
+│       │   └── sap_paths.txt
+│       │
+│       ├── web/
+│       │   ├── skeleton.py
+│       │   ├── 80.py
+│       │   ├── 80NN.py
+│       │   ├── 81NN.py
+│       │   ├── 21212.py
+│       │   ├── 21213.py
+│       │   ├── 4NN80.py
+│       │   ├── 4239.py
+│       │   ├── 443.py
+│       │   ├── 443NN.py
+│       │   ├── 444NN.py
+│       │   ├── 5NN00.py
+│       │   ├── 5NN01.py
+│       │   ├── 5NN05.py
+│       │   ├── 5NN06.py
+│       │   ├── 5NN19.py
+│       │   └── ITS.py
+│       │
+│       └── vuln/
+│           ├── skeleton.py
+│           └── checkCTC.py
 ```
 
 ### Next on da list
