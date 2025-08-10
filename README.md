@@ -215,10 +215,10 @@ saprouterNative
 
 ## GUI4Windows
 
-SAP 3D Visual Enterprise Viewer
-SAP Business Client
-SAP Business Explorer
-SAP GUI for Windows
-SAPSetup Automatic Workstation Update Service
-? SNC Client Enccryption 2.0
+- SAP 3D Visual Enterprise Viewer
+- SAP Business Client
+- SAP Business Explorer
+- SAP GUI for Windows
+- SAPSetup Automatic Workstation Update Service
+- ? SNC Client Enccryption 2.0
 
