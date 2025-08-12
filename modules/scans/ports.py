@@ -21,13 +21,14 @@ except ImportError as e:
     sys.exit(1)
 
 try:
-    from src.ports_label import build_port_labels
+    from src.ports_label import build_port_labels, build_port_groups
 except ImportError as e:
     print(f"[!] Failed to import port label logic: {e}")
     sys.exit(1)
 
 SESSION_DB = Path(__file__).parent.parent.parent / "db" / "sapstract_sessions.db"
 PORT_LABELS = build_port_labels()
+PORT_GROUPS = build_port_groups()
 
 def run(args, set_session, current_session):
     if not current_session:
@@ -81,10 +82,12 @@ def store_results(session_name, target, results):
         for state in ["open", "closed", "filtered"]:
             for port in results[state]:
                 label = PORT_LABELS.get(port, "")
+                group = PORT_GROUPS.get(port, "")
                 c.execute("""
-                    INSERT OR REPLACE INTO ports (session_name, target, port, status, label)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (session_name, target, port, state.upper(), label))
+                    INSERT OR REPLACE INTO ports (
+                        session_name, target, port, status, label, group_pattern
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                """, (session_name, target, port, state.upper(), label, group))
         conn.commit()
 
 def is_host_reachable(ip):

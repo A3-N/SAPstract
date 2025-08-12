@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 
 VULN_DIR = Path(__file__).parent.parent / "vuln"
-WANTED_VULNS = []  # e.g., ["checkCTC", "checkFoo"]
+WANTED_VULNS = ["checkCTC"] 
 
 def _get(context, key, default=None):
     if context is None: return default

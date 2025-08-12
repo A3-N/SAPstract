@@ -67,6 +67,7 @@ def init_db():
             port INTEGER NOT NULL,
             status TEXT NOT NULL,
             label TEXT,
+            group_pattern TEXT,
             UNIQUE(session_name, target, port)
         )
         """)

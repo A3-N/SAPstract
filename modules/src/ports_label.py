@@ -99,3 +99,50 @@ def build_port_labels():
     return port_labels
 
 #CREDITS TO BIZSPLOIT
+
+def build_port_groups():
+    groups = {}
+
+    def add(pattern, exclude=None):
+        for p in get_nn_ports(pattern, exclude or []):
+            groups[p] = pattern
+
+    # NetWeaver ABAP + ICM
+    add("32NN", [3299])
+    add("33NN", [3389]) 
+    add("48NN")
+    add("80NN")
+    add("443NN")
+    add("36NN")
+    add("81NN")
+    add("444NN")
+
+    # NetWeaver JAVA
+    add("5NN00")
+    add("5NN01")
+    add("5NN02")
+    add("5NN03")
+    add("5NN04")
+    add("5NN05")
+    add("5NN06")
+    add("5NN07")
+    add("5NN08")
+    add("5NN10")
+
+    # Admin services
+    add("5NN13")
+    add("5NN14")
+
+    # SAP IGS
+    add("4NN00")
+    add("4NN01")
+    add("4NN02")
+    add("4NN80")
+
+    # Install tools 
+    add("5NN17")
+    add("5NN18")
+    add("5NN19")
+
+    return groups
+

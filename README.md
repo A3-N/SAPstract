@@ -222,3 +222,32 @@ saprouterNative
 - SAPSetup Automatic Workstation Update Service
 - ? SNC Client Enccryption 2.0
 
+```
+ABAP / ICM & MsgServer HTTP/S
+80NN
+443NN
+81NN
+444NN
+
+Java HTTP/S variants
+5NN00
+5NN01
+5NN05
+5NN06
+5NN19
+
+IGS HTTP Admin
+4NN80
+
+ITS (Internet Transaction Server)
+ITS
+
+Common fixed HTTP/S
+80
+443
+
+SAPinst / Upgrade HTTP UIs
+21212
+21213
+4239
+```
