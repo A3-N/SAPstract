@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import os
 import sys
+import shlex
+import shutil
 from pathlib import Path
 
-from src.ui import info, success, warn, fail, plain, set_no_color, _colorize
+from src.ui import info, warn, fail, plain, set_no_color, _colorize
 from src.ascii_art import ASCII_BANNER, render_banner
 
 APP_NAME = "SAPstract"
@@ -30,13 +32,70 @@ def show_help():
     plain("""
 Commands:
   help                  Show this help
-  version               Show version
+  ls [dir ...]          List directory contents
   exit | quit | q       Exit
 """)
 
 
+def do_ls(paths, show_hidden=False):
+    if not paths:
+        paths = ['.']
+
+    term_width = shutil.get_terminal_size((80, 20)).columns
+
+    for i, p in enumerate(paths):
+        try:
+            entries = os.listdir(p)
+        except Exception as e:
+            fail(f"ls: cannot access '{p}': {e}")
+            continue
+
+        if not show_hidden:
+            entries = [name for name in entries if not name.startswith('.')]
+        entries.sort()
+
+        if len(paths) > 1:
+            plain(f"{p}:")
+
+        if not entries:
+            plain("")
+        else:
+            # add / suffix for dirs
+            entries_display = []
+            for name in entries:
+                fullpath = os.path.join(p, name)
+                if os.path.isdir(fullpath):
+                    entries_display.append(name + "/")
+                else:
+                    entries_display.append(name)
+
+            maxlen = max(len(name) for name in entries_display)
+            col_width = maxlen + 2
+            cols = max(1, term_width // col_width)
+
+            line_buf = ""
+            col_idx = 0
+            for name in entries_display:
+                line_buf += name.ljust(col_width)
+                col_idx += 1
+                if col_idx == cols:
+                    plain(line_buf.rstrip())
+                    line_buf = ""
+                    col_idx = 0
+            if line_buf:
+                plain(line_buf.rstrip())
+
+        if i != len(paths) - 1:
+            plain("")
+
+
 def run_command(cmdline: str):
-    parts = cmdline.strip().split()
+    try:
+        parts = shlex.split(cmdline)
+    except ValueError as e:
+        fail(f"parse error: {e}")
+        return
+
     if not parts:
         return
 
@@ -50,8 +109,10 @@ def run_command(cmdline: str):
         show_help()
         return
 
-    if cmd == "version":
-        info(f"{APP_NAME} version: {APP_VER}")
+    if cmd == "ls":
+        show_hidden = any(a.startswith('-') and ('a' in a or 'A' in a) for a in args)
+        paths = [a for a in args if not a.startswith('-')]
+        do_ls(paths, show_hidden=show_hidden)
         return
 
     fail(f"Unknown command '{cmd}'. Type 'help'.", src=None)
@@ -73,8 +134,8 @@ def main():
             break
         except KeyboardInterrupt:
             print()
-            info("Bye.")   
-            sys.exit(0)    
+            info("Bye.")
+            sys.exit(0)
 
         try:
             run_command(line)
@@ -82,6 +143,7 @@ def main():
             raise
         except Exception as e:
             fail(f"Unhandled error: {e!r}", src="core")
+
 
 if __name__ == "__main__":
     main()
