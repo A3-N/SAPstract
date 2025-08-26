@@ -1,38 +1,34 @@
+$script:LogDir   = if ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }
+$script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$script:LogPath  = Join-Path $script:LogDir ("SAPaudit_{0}.log" -f $script:LogStamp)
 
-param(
-  [string]$LogPath = $null,
-  [switch]$ShowEstablished
-)
+try {
+  "=== SAPaudit run $(Get-Date -Format s) on $env:COMPUTERNAME ===" | Out-File -FilePath $script:LogPath -Encoding UTF8
+} catch { }
 
 function Append-Log {
   param([string]$Line)
-  if ($null -ne $LogPath -and $LogPath -ne '') {
-    try {
-      $dir = Split-Path -Path $LogPath -Parent
-      if ($dir -and -not (Test-Path -LiteralPath $dir)) {
-        New-Item -ItemType Directory -Path $dir | Out-Null
-      }
-      Add-Content -Path $LogPath -Value $Line
-    } catch {
-      if (-not (Get-Variable -Name SAPstractLogWarned -Scope Script -ErrorAction SilentlyContinue)) {
-        $script:SAPstractLogWarned = $true
-        Write-Host "[SAPstract]" -ForegroundColor Yellow -NoNewline
-        Write-Host " Logging disabled: $($_.Exception.Message)"
-      }
+  try {
+    Add-Content -Path $script:LogPath -Value $Line
+  } catch {
+    if (-not (Get-Variable -Name SAPstractLogWarned -Scope Script -ErrorAction SilentlyContinue)) {
+      $script:SAPstractLogWarned = $true
+      Write-Host "[SAPstract]" -ForegroundColor Yellow -NoNewline
+      Write-Host " Logging disabled: $($_.Exception.Message)"
     }
   }
 }
 
-function Write-Log      { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Cyan  -NoNewline; Write-Host " $Msg";   Append-Log $Msg }
-function Write-Success  { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Green -NoNewline; Write-Host " $Msg";   Append-Log $Msg }
-function Write-Warn     { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Yellow -NoNewline; Write-Host " $Msg";  Append-Log $Msg }
-function Write-ErrorMsg { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Red   -NoNewline; Write-Host " $Msg";   Append-Log $Msg }
+function Write-Log      { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Cyan  -NoNewline;  Write-Host " $Msg"; Append-Log $Msg }
+function Write-Success  { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Green -NoNewline;  Write-Host " $Msg"; Append-Log $Msg }
+function Write-Warn     { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Yellow -NoNewline; Write-Host " $Msg"; Append-Log $Msg }
+function Write-ErrorMsg { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Red   -NoNewline;  Write-Host " $Msg"; Append-Log $Msg }
 
 function Test-IsAdmin {
   try {
-    $current   = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($current)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $pr = New-Object Security.Principal.WindowsPrincipal($id)
+    return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   } catch {
     Write-Warn "Admin check failed: $($_.Exception.Message)"
     return $false
@@ -125,11 +121,9 @@ function Get-PortRules {
 }
 
 function Get-ProcMap {
-  $map = @{}
-  try { Get-Process | ForEach-Object { $map[$_.Id] = $_.ProcessName } } catch {}
-  $map
+  $m = @{}; try { Get-Process | ForEach-Object { $m[$_.Id] = $_.ProcessName } } catch {}
+  $m
 }
-
 function Get-ServiceMap {
   $svcmap = @{}
   try {
@@ -140,23 +134,17 @@ function Get-ServiceMap {
         $svcmap[$svcPid] += ($_.Name + "(" + $_.DisplayName + ")")
       }
     }
-  } catch {
-    Write-Warn "Service enumeration failed: $($_.Exception.Message)"
-  }
+  } catch { Write-Warn "Service enumeration failed: $($_.Exception.Message)" }
   $svcmap
 }
 
 function Split-EndPoint {
   param([string]$ep)
   $addr = $ep; $port = $null
-  if ($ep -match '^\[(?<v6>.+)\]:(?<p>\d+)$') {
-    $addr = $Matches.v6; $port = $Matches.p
-  } elseif ($ep -match '^(?<h>.+?):(?<p>\d+)$') {
-    $addr = $Matches.h;  $port = $Matches.p
-  }
+  if ($ep -match '^\[(?<v6>.+)\]:(?<p>\d+)$') { $addr = $Matches.v6; $port = $Matches.p }
+  elseif ($ep -match '^(?<h>.+?):(?<p>\d+)$') { $addr = $Matches.h;  $port = $Matches.p }
   ,$addr, $port
 }
-
 function Classify-Port {
   param([string]$p, [array]$Rules)
   if (-not $p -or -not ($p -match '^\d+$')) { return $null }
@@ -205,7 +193,7 @@ function Emit-NetstatMatches {
     $null, $lport = Split-EndPoint $local
     $null, $rport = Split-EndPoint $foreign
 
-    $lp = Classify-Port $lport $rules  
+    $lp = Classify-Port $lport $rules
     if (-not $lp) { continue }
 
     if ($proto -eq 'TCP') {
@@ -254,7 +242,8 @@ $null = Test-IsAdmin | ForEach-Object {
 }
 
 Write-Log "Starting audit"
-Emit-NetstatMatches -ShowEstablished:$ShowEstablished
+Emit-NetstatMatches
 Probe-SAPRoots
 Write-Log "Done."
+Write-Log ("Saved log to: {0}" -f $script:LogPath)
 
