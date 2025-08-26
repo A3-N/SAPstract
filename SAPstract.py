@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-import os
-import sys
-import shlex
-import shutil
+import os, sys, shlex, shutil
 from pathlib import Path
 
 from src.ui import info, warn, fail, plain, set_no_color, _colorize
 from src.ascii_art import ASCII_BANNER, render_banner
+from src.sessions import (
+    get_current_session_name,
+    set_session,
+    remove_session,
+    list_sessions,
+    session_names,
+)
 
 APP_NAME = "SAPstract"
 APP_VER  = "0.0.0-dev (skeleton)"
@@ -15,11 +19,14 @@ ROOT_DIR = Path(__file__).parent.resolve()
 if os.environ.get("NO_COLOR") or os.environ.get("SAPSTRACT_NO_COLOR"):
     set_no_color(True)
 
+COMMANDS = ["help", "ls", "set", "remove", "list", "exit", "quit", "q"]
+
 
 def get_prompt():
     sap = _colorize("SAP", "blue", bold=True)
     stract = _colorize("stract", "white", bold=True)
-    return f"{sap}{stract} > "
+    cur = get_current_session_name()
+    return f"{sap}{stract} ({cur}) > " if cur else f"{sap}{stract} > "
 
 
 def print_ascii_banner():
@@ -31,62 +38,126 @@ def print_ascii_banner():
 def show_help():
     plain("""
 Commands:
-  help                  Show this help
-  ls [dir ...]          List directory contents
-  exit | quit | q       Exit
+  help                        Show this help
+  ls [dir ...]                List directory contents
+  set session <name>          Set current session (creates if needed)
+  remove session <name>       Remove a session (and its stash)
+  list session                List sessions (mark current), show IDs
+  exit | quit | q             Exit
 """)
 
 
 def do_ls(paths, show_hidden=False):
     if not paths:
         paths = ['.']
-
     term_width = shutil.get_terminal_size((80, 20)).columns
-
     for i, p in enumerate(paths):
         try:
             entries = os.listdir(p)
         except Exception as e:
             fail(f"ls: cannot access '{p}': {e}")
             continue
-
         if not show_hidden:
-            entries = [name for name in entries if not name.startswith('.')]
+            entries = [n for n in entries if not n.startswith('.')]
         entries.sort()
-
         if len(paths) > 1:
             plain(f"{p}:")
-
         if not entries:
             plain("")
         else:
-            # add / suffix for dirs
-            entries_display = []
-            for name in entries:
-                fullpath = os.path.join(p, name)
-                if os.path.isdir(fullpath):
-                    entries_display.append(name + "/")
-                else:
-                    entries_display.append(name)
-
-            maxlen = max(len(name) for name in entries_display)
-            col_width = maxlen + 2
-            cols = max(1, term_width // col_width)
-
-            line_buf = ""
-            col_idx = 0
-            for name in entries_display:
-                line_buf += name.ljust(col_width)
-                col_idx += 1
-                if col_idx == cols:
-                    plain(line_buf.rstrip())
-                    line_buf = ""
-                    col_idx = 0
-            if line_buf:
-                plain(line_buf.rstrip())
-
+            disp = [n + "/" if os.path.isdir(os.path.join(p, n)) else n for n in entries]
+            maxlen = max(len(n) for n in disp)
+            colw = maxlen + 2
+            cols = max(1, term_width // colw)
+            buf = ""
+            ci = 0
+            for n in disp:
+                buf += n.ljust(colw)
+                ci += 1
+                if ci == cols:
+                    plain(buf.rstrip())
+                    buf = ""
+                    ci = 0
+            if buf:
+                plain(buf.rstrip())
         if i != len(paths) - 1:
             plain("")
+
+
+def _enable_tab_completion():
+    try:
+        import readline
+    except ImportError:
+        warn("Tab completion not available on this platform.")
+        return
+
+    def _complete_path(text):
+        base = os.path.expanduser(text or "")
+        d, partial = os.path.split(base)
+        d = d or "."
+        try:
+            names = os.listdir(d)
+        except Exception:
+            return []
+        out = []
+        for n in names:
+            if not n.startswith(partial):
+                continue
+            path = os.path.join(d, n)
+            out.append(os.path.join(d, n) + (os.sep if os.path.isdir(path) else ""))
+        return out
+
+    def completer(text, state):
+        # Current input buffer and word bounds
+        buf = readline.get_line_buffer()
+        beg = readline.get_begidx()
+        end = readline.get_endidx()
+
+        # Tokens strictly BEFORE the current word
+        before = buf[:beg]
+        try:
+            tokens = shlex.split(before)
+        except Exception:
+            tokens = before.strip().split()
+
+        # If no tokens yet → complete command names
+        if not tokens:
+            options = [c for c in COMMANDS if c.startswith(text)]
+        else:
+            cmd = tokens[0]
+
+            if cmd in ("set", "remove"):
+                # expecting: set session <name> / remove session <name>
+                if len(tokens) == 1:
+                    # completing the second token -> suggest literal 'session'
+                    options = [w for w in ["session"] if w.startswith(text)]
+                elif len(tokens) >= 2 and tokens[1] == "session":
+                    # completing the third+ token -> suggest session names only
+                    options = [n for n in session_names() if n.startswith(text)]
+                else:
+                    options = []
+
+            elif cmd == "list":
+                # expecting: list session
+                if len(tokens) == 1:
+                    options = [w for w in ["session"] if w.startswith(text)]
+                else:
+                    options = []
+
+            elif cmd == "ls":
+                options = _complete_path(text)
+
+            else:
+                options = []
+
+        try:
+            return sorted(options)[state]
+        except IndexError:
+            return None
+
+    readline.set_completer_delims(' \t\n')
+    readline.parse_and_bind('tab: complete')
+    readline.set_completer(completer)
 
 
 def run_command(cmdline: str):
@@ -95,7 +166,6 @@ def run_command(cmdline: str):
     except ValueError as e:
         fail(f"parse error: {e}")
         return
-
     if not parts:
         return
 
@@ -111,8 +181,23 @@ def run_command(cmdline: str):
 
     if cmd == "ls":
         show_hidden = any(a.startswith('-') and ('a' in a or 'A' in a) for a in args)
-        paths = [a for a in args if not a.startswith('-')]
-        do_ls(paths, show_hidden=show_hidden)
+        do_ls([a for a in args if not a.startswith('-')], show_hidden)
+        return
+
+    if cmd == "set" and len(args) >= 2 and args[0] == "session":
+        name = " ".join(args[1:]).strip()
+        res = set_session(name)
+        (info if res["ok"] else fail)(res["msg"])
+        return
+
+    if cmd == "remove" and len(args) >= 2 and args[0] == "session":
+        name = " ".join(args[1:]).strip()
+        res = remove_session(name)
+        (info if res["ok"] else warn)(res["msg"])
+        return
+
+    if cmd == "list" and (len(args) == 1 and args[0] == "session"):
+        plain(list_sessions())
         return
 
     fail(f"Unknown command '{cmd}'. Type 'help'.", src=None)
@@ -125,6 +210,8 @@ def main():
         return
 
     print_ascii_banner()
+    _enable_tab_completion()
+
     while True:
         try:
             line = input(get_prompt())
