@@ -3,6 +3,42 @@
 
 FileSystem Audit. 
 
+#### MAIN
+/usr
+/usr/sap
+\usr\sap\<SID>\SYS\global\security\rsecssfs
+\usr\sap\<SID>\SYS\profile
+\usr\sap\<SID>\SYS\exe\jvm\NTAMD64
+	\usr\sap\<SID>\SYS\exe\jvm\NTAMD64\sapjvm_8.1.103\sapjvm_8\bin
+	\usr\sap\<SID>\SYS\exe\jvm\NTAMD64\sapjvm_8.1.103\sapjvm_8\jre\bin
+\usr\sap\<SID>\J70
+\Program Files\SAP
+	\Program Files\SAP\hostctrl
+		exe/
+		work/
+\Program Files\sapinst_instdir\NW750\SYB\INSTALL\STANDALONE\STD\PICP
+\Program Files\sapinst_instdir\NW750\SYB\INSTALL\STD
+\sybase\<SID>
+#### TOOLS:
+\Program Files (x86)\SAP MDM 7.1
+\usr\sap\<SID>\SYS\exe\uc\NTAMD64
+	rsecssfx
+\Program Files\SAP
+	\Program Files\SAP\SAP MMC SnapIn
+\SUM\SUM\abap
+\SUM\SUM\jvm\jre
+Program Files\sap\hdbclient
+/usr/sap/<SID>/<Instance>/work/
+
+#### SUB
+/SAP
+/sap
+
+#### FILEEXT
+.SCA
+.SAR
+
+
 ---
 
 SAP Enum and Exploit

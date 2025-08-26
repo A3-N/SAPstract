@@ -171,12 +171,16 @@
   },
   "active": "aa8ac74c9e133d2c",
   "lastOpenFiles": [
+    "audit/audit.sh~",
+    "audit/audit.ps1~",
+    "audit/audit.ps1",
+    "audit/audit.sh",
+    "audit/audit_win.ps1~",
+    "audit/audit_unix.sh~",
+    "audit/audit_win.ps1",
+    "audit/audit_unix.sh",
+    "audit",
     "src/__pycache__/ui.cpython-313.pyc",
-    "src/__pycache__/ascii_art.cpython-313.pyc",
-    "src/ui.py",
-    "src/ascii_art.py",
-    "src/__pycache__",
-    "src",
-    "SAPstract.py"
+    "src/__pycache__/ascii_art.cpython-313.pyc"
   ]
 }
