@@ -108,37 +108,30 @@ def _enable_tab_completion():
         return out
 
     def completer(text, state):
-        # Current input buffer and word bounds
         buf = readline.get_line_buffer()
         beg = readline.get_begidx()
         end = readline.get_endidx()
 
-        # Tokens strictly BEFORE the current word
         before = buf[:beg]
         try:
             tokens = shlex.split(before)
         except Exception:
             tokens = before.strip().split()
 
-        # If no tokens yet → complete command names
         if not tokens:
             options = [c for c in COMMANDS if c.startswith(text)]
         else:
             cmd = tokens[0]
 
             if cmd in ("set", "remove"):
-                # expecting: set session <name> / remove session <name>
                 if len(tokens) == 1:
-                    # completing the second token -> suggest literal 'session'
                     options = [w for w in ["session"] if w.startswith(text)]
                 elif len(tokens) >= 2 and tokens[1] == "session":
-                    # completing the third+ token -> suggest session names only
                     options = [n for n in session_names() if n.startswith(text)]
                 else:
                     options = []
 
             elif cmd == "list":
-                # expecting: list session
                 if len(tokens) == 1:
                     options = [w for w in ["session"] if w.startswith(text)]
                 else:

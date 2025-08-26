@@ -20,8 +20,21 @@
               "icon": "lucide-file",
               "title": "README"
             }
+          },
+          {
+            "id": "e83bd7a75373f174",
+            "type": "leaf",
+            "state": {
+              "type": "release-notes",
+              "state": {
+                "currentVersion": "1.9.12"
+              },
+              "icon": "lucide-book-up",
+              "title": "Release Notes 1.9.12"
+            }
           }
-        ]
+        ],
+        "currentTab": 1
       }
     ],
     "direction": "vertical"
@@ -169,7 +182,7 @@
       "bases:Create new base": false
     }
   },
-  "active": "aa8ac74c9e133d2c",
+  "active": "e83bd7a75373f174",
   "lastOpenFiles": [
     "SAPstract.py~",
     "src/sessions.py~",
