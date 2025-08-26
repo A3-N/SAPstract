@@ -1,231 +1,87 @@
+#!/usr/bin/env python3
 import os
 import sys
-import sqlite3
-import importlib.util
-from termcolor import colored
 from pathlib import Path
 
-try:
-    import readline
-except ImportError:
-    if os.name == 'nt':
-        try:
-            import pyreadline3 as readline
-        except ImportError:
-            print("[!] Windows requires 'pyreadline3'. Run: pip install pyreadline3")
-            sys.exit(1)
-    else:
-        raise
+from src.ui import info, success, warn, fail, plain, set_no_color, _colorize
+from src.ascii_art import ASCII_BANNER, render_banner
 
-try:
-    import colorama
-    colorama.init()
-except ImportError:
-    if os.name == 'nt':
-        print("[!] 'colorama' required for colored output. Run: pip install colorama")
-        sys.exit(1)
-
-from termcolor import colored
-from modules.ui import info, success, warn, fail, plain
-
-if os.name == 'nt':
-    os.system("chcp 65001 >NUL")
-
+APP_NAME = "SAPstract"
+APP_VER  = "0.0.0-dev (skeleton)"
 ROOT_DIR = Path(__file__).parent.resolve()
-DB_DIR = ROOT_DIR / "db"
-MODULES_DIR = ROOT_DIR / "modules"
-SESSION_DB = DB_DIR / "sapstract_sessions.db"
 
-LOADED_COMMANDS = {}
-CURRENT_SESSION = None
+if os.environ.get("NO_COLOR") or os.environ.get("SAPSTRACT_NO_COLOR"):
+    set_no_color(True)
 
-
-def init_db():
-    DB_DIR.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(SESSION_DB) as conn:
-        c = conn.cursor()
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS targets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_name TEXT NOT NULL,
-            target TEXT NOT NULL,
-            UNIQUE(session_name, target)
-        )
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS ports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_name TEXT NOT NULL,
-            target TEXT NOT NULL,
-            port INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            label TEXT,
-            group_pattern TEXT,
-            UNIQUE(session_name, target, port)
-        )
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS web_scans (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_name  TEXT NOT NULL,
-            target        TEXT NOT NULL,
-            port          INTEGER NOT NULL,
-            scheme        TEXT NOT NULL,
-            sap_label     TEXT NOT NULL,
-            web_module    TEXT NOT NULL,
-            started_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-            finished_at   DATETIME,
-            status        TEXT NOT NULL DEFAULT 'TRIGGERED',
-            notes         TEXT
-        )
-        """)
-        c.execute("""
-        CREATE INDEX IF NOT EXISTS idx_web_scans_lookup
-          ON web_scans(session_name, target, port, sap_label)
-        """)
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS vuln_checks (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_id       INTEGER NOT NULL,
-            vuln_module   TEXT NOT NULL,
-            result        TEXT NOT NULL,
-            reason        TEXT,
-            details_json  TEXT,
-            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (scan_id, vuln_module)
-        )
-        """)
-        c.execute("""
-        CREATE INDEX IF NOT EXISTS idx_vuln_checks_scan ON vuln_checks(scan_id)
-        """)
-        conn.commit()
-
-def load_modules():
-    sys.path.insert(0, str(MODULES_DIR))
-    for file in MODULES_DIR.glob("*.py"):
-        mod_name = file.stem
-        spec = importlib.util.spec_from_file_location(mod_name, file)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        LOADED_COMMANDS[mod_name] = mod
-
-
-def set_current_session(name):
-    global CURRENT_SESSION
-    CURRENT_SESSION = name
 
 def get_prompt():
-    sap = colored("SAP", "blue")
-    stract = colored("stract", "white")
-    if CURRENT_SESSION:
-        return f"{sap}{stract} ({CURRENT_SESSION}) > "
+    sap = _colorize("SAP", "blue", bold=True)
+    stract = _colorize("stract", "white", bold=True)
     return f"{sap}{stract} > "
 
 
-def fetch_session_names():
-    with sqlite3.connect(SESSION_DB) as conn:
-        c = conn.cursor()
-        c.execute("SELECT name FROM sessions")
-        return [row[0] for row in c.fetchall()]
+def print_ascii_banner():
+    render_banner(ASCII_BANNER)
+    info(f"{APP_NAME} — {APP_VER}")
+    info("Type 'help' for available commands.")
 
 
-def setup_autocomplete():
-    def completer(text, state):
-        buffer = readline.get_line_buffer().split()
-        if not buffer:
-            matches = list(LOADED_COMMANDS.keys()) + ["exit"]
-        else:
-            cmd = buffer[0]
-            args_so_far = buffer[1:]
+def show_help():
+    plain("""
+Commands:
+  help                  Show this help
+  version               Show version
+  exit | quit | q       Exit
+""")
 
-            if len(buffer) == 1:
-                matches = [c for c in list(LOADED_COMMANDS.keys()) + ["exit"] if c.startswith(text)]
-            elif cmd in LOADED_COMMANDS:
-                mod = LOADED_COMMANDS[cmd]
-                if hasattr(mod, "complete"):
-                    try:
-                        options = mod.complete(args_so_far)
-                        if len(buffer) > 1:
-                            matches = [o for o in options if o.startswith(text)]
-                        else:
-                            matches = options
-                    except Exception:
-                        matches = []
-                else:
-                    matches = []
-            else:
-                matches = []
 
-        return matches[state] if state < len(matches) else None
-
-    readline.parse_and_bind("tab: complete")
-    readline.set_completer(completer)
-
-def main():
-    init_db()
-    load_modules()
-    setup_autocomplete()
-
-    print("""\033[94m
-     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\033[97m.dBBBBP dBBBBBBP dBBBBBb dBBBBBb     dBBBP dBBBBBBP\033[94m
-     @@@@#+-     .=+*%@@@@@*:::::=@@@@@*:::::::-==+*%@@@@@@@@@@@@@@@@ \033[97m.BP                   dBP      BB\033[94m                       
-     @@+              *@@@%       =@@@@+              +@@@@@@@@@@@@   \033[97m`BBBBb   dBP     dBBBBK   dBP BB   dBP      dBP\033[94m    
-     @=      .::     %@@@@         +@@@+               :@@@@@@@@@@       \033[97mdBP  dBP     dBP  BB  dBP  BB  dBP      dBP\033[94m
-     @      @@@@@@@@@@@@@-          %@@+     +@@@%-     +@@@@@@     \033[97mdBBBBP'  dBP     dBP  dB' dBBBBBBB dBBBBP   dBP\033[94m 
-     @.       :*%@@@@@@@+     =     =@@+     +@@@@=     +@@@@      \033[97m-----------------------------------------------------\033[94m     
-     @%:           =*@@#     -%=     +@+     :+++:      %@@@        \033[97mTool: SAPstract  — SAP enumeration & fuzzing toolkit\033[94m
-     @@@#+           :*:     *@@      #+               #@@          \033[97mBy:   @A3-N      — github.com/A3-N/SAPstract\033[94m     
-     @@@@@@@%#+.             +#*:     -+            =#@@            \033[97mCred: Bizsploit  — Mariano Nuñez Di Croce\033[94m
-     @@%*@@@@@@@-                      .     +@@@@@@@@                    \033[97mMetasploit — rapid7\033[94m
-     @%.                                     +@@@@@@                      \033[97mpysap      — OWASP\033[94m 
-     @-                   -@@%%%@@+          +@@@@                          
-     @@@#+=-. .-=@@@@@@@@@@@@@@@@@+=@@@#@@@@@@@@                    
-     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                          \033[97mDeveloped while doing ur mom, loser\033[94m
-    """)
-
-    if len(sys.argv) > 1:
-        base_cmd = sys.argv[1]
-        args = sys.argv[2:]
-        if base_cmd in LOADED_COMMANDS:
-            LOADED_COMMANDS[base_cmd].run(args, set_current_session, CURRENT_SESSION)
-        elif base_cmd == "exit":
-            os.system("cls" if os.name == "nt" else "clear")
-            info("Bye.")
-        else:
-            print(f"[!] Unknown command '{base_cmd}'. Type 'help'.")
+def run_command(cmdline: str):
+    parts = cmdline.strip().split()
+    if not parts:
         return
 
+    cmd, *args = parts
+
+    if cmd in ("exit", "quit", "q"):
+        info("Bye.")
+        sys.exit(0)
+
+    if cmd in ("help", "h", "?"):
+        show_help()
+        return
+
+    if cmd == "version":
+        info(f"{APP_NAME} version: {APP_VER}")
+        return
+
+    fail(f"Unknown command '{cmd}'. Type 'help'.", src=None)
+
+
+def main():
+    if len(sys.argv) > 1:
+        print_ascii_banner()
+        run_command(" ".join(sys.argv[1:]))
+        return
+
+    print_ascii_banner()
     while True:
         try:
-            cmd = input(get_prompt()).strip()
-            if not cmd:
-                continue
-
-            args = cmd.split()
-            base_cmd = args[0]
-
-            if base_cmd in LOADED_COMMANDS:
-                LOADED_COMMANDS[base_cmd].run(args[1:], set_current_session, CURRENT_SESSION)
-            elif base_cmd == "exit":
-                os.system("cls" if os.name == "nt" else "clear")
-                info("Bye.")
-                break
-            else:
-                print(colored(f"[!] Unknown command '{base_cmd}'. Type 'help'.", "red"))
-
-        except KeyboardInterrupt:
-            os.system("cls" if os.name == "nt" else "clear")
-            print("")
+            line = input(get_prompt())
+        except EOFError:
+            print()
             info("Bye.")
             break
+        except KeyboardInterrupt:
+            print()
+            info("Bye.")   
+            sys.exit(0)    
 
+        try:
+            run_command(line)
+        except SystemExit:
+            raise
+        except Exception as e:
+            fail(f"Unhandled error: {e!r}", src="core")
 
 if __name__ == "__main__":
     main()
