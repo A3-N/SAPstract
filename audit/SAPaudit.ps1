@@ -205,20 +205,19 @@ function Emit-NetstatMatches {
     $null, $lport = Split-EndPoint $local
     $null, $rport = Split-EndPoint $foreign
 
-    $lp = Classify-Port $lport $rules  # local match label (if any)
+    $lp = Classify-Port $lport $rules  
     if (-not $lp) { continue }
 
     if ($proto -eq 'TCP') {
       $st = ($state -as [string]).Trim().ToUpperInvariant()
       if ($st -eq 'LISTENING') {
-        if (-not $lp) { continue }
       } elseif ($st -eq 'ESTABLISHED') {
       } else {
         continue
       }
     }
 
-    $label = if ($lp) { $lp } else { $rp }
+    $label = $lp
 
     $pname = $procmap[$procId]
     if (-not $pname) { try { $pname = (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch { $pname = $null } }
