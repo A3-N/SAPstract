@@ -1,28 +1,24 @@
-$script:LogDir   = if ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }
-$script:LogStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$script:LogPath  = Join-Path $script:LogDir ("SAPaudit_{0}.log" -f $script:LogStamp)
+Set-StrictMode -Version Latest
 
-try {
-  "=== SAPaudit run $(Get-Date -Format s) on $env:COMPUTERNAME ===" | Out-File -FilePath $script:LogPath -Encoding UTF8
-} catch { }
+$script:OutDir   = if ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }
+$script:Stamp    = Get-Date -Format 'yyyyMMdd_HHmmss'
+$script:BaseName = "SAPaudit_$($script:Stamp)"
+$script:NDJPath  = Join-Path $script:OutDir ("$($script:BaseName).ndjson")
 
-function Append-Log {
-  param([string]$Line)
+function Write-Info     { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Cyan    -NoNewline;  Write-Host " $Msg" }
+function Write-Success  { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Green   -NoNewline;  Write-Host " $Msg" }
+function Write-Warn     { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Yellow  -NoNewline;  Write-Host " $Msg" }
+function Write-ErrorMsg { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Red     -NoNewline;  Write-Host " $Msg" }
+
+function Write-NDJSON {
+  param([hashtable]$Obj)
   try {
-    Add-Content -Path $script:LogPath -Value $Line
+    $json = $Obj | ConvertTo-Json -Depth 6 -Compress
+    Add-Content -Path $script:NDJPath -Value $json -Encoding UTF8
   } catch {
-    if (-not (Get-Variable -Name SAPstractLogWarned -Scope Script -ErrorAction SilentlyContinue)) {
-      $script:SAPstractLogWarned = $true
-      Write-Host "[SAPstract]" -ForegroundColor Yellow -NoNewline
-      Write-Host " Logging disabled: $($_.Exception.Message)"
-    }
+    Write-ErrorMsg "Failed to write NDJSON: $($_.Exception.Message)"
   }
 }
-
-function Write-Log      { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Cyan  -NoNewline;  Write-Host " $Msg"; Append-Log $Msg }
-function Write-Success  { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Green -NoNewline;  Write-Host " $Msg"; Append-Log $Msg }
-function Write-Warn     { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Yellow -NoNewline; Write-Host " $Msg"; Append-Log $Msg }
-function Write-ErrorMsg { param([string]$Msg) Write-Host "[SAPstract]" -ForegroundColor Red   -NoNewline;  Write-Host " $Msg"; Append-Log $Msg }
 
 function Test-IsAdmin {
   try {
@@ -30,13 +26,27 @@ function Test-IsAdmin {
     $pr = New-Object Security.Principal.WindowsPrincipal($id)
     return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
   } catch {
-    Write-Warn "Admin check failed: $($_.Exception.Message)"
+    Write-ErrorMsg "Admin check failed: $($_.Exception.Message)"
     return $false
   }
 }
 
-function Add-Rule($pattern, $label) { @{ Regex = $pattern; Label = $label } }
+$IsAdmin = Test-IsAdmin
+if (-not $IsAdmin) {
+  Write-Warn "Not running as Administrator."
 
+  Write-Host "[SAPstract]" -ForegroundColor Yellow -NoNewline
+  Write-Host " Continue anyway? (y/n): " -NoNewline
+
+  $resp = [Console]::ReadLine()
+
+  if ($resp -notmatch '^[Yy]$') {
+    Write-Warn "Exiting..."
+    exit 1
+  }
+}
+
+function Add-Rule($pattern, $label) { @{ Regex = $pattern; Label = $label } }
 function Get-PortRules {
   @(
     # NetWeaver ABAP + ICM
@@ -67,7 +77,7 @@ function Get-PortRules {
     (Add-Rule '^5\d{2}13$'   'SAP Start Service'), # 5NN13
     (Add-Rule '^5\d{2}14$'   'SAP Start Service'), # 5NN14
 
-    # SAP IGS (Internet Graphics Service)
+    # SAP IGS
     (Add-Rule '^4\d{2}80$'   'IGS HTTP'),          # 4NN80
     (Add-Rule '^4\d{2}00$'   'IGS Multiplexer'),   # 4NN00
     (Add-Rule '^4\d{2}01$'   'IGS Portwatcher'),   # 4NN01
@@ -120,10 +130,7 @@ function Get-PortRules {
   )
 }
 
-function Get-ProcMap {
-  $m = @{}; try { Get-Process | ForEach-Object { $m[$_.Id] = $_.ProcessName } } catch {}
-  $m
-}
+function Get-ProcMap { $m=@{}; try { Get-Process | ForEach-Object { $m[$_.Id] = $_.ProcessName } } catch {}; $m }
 function Get-ServiceMap {
   $svcmap = @{}
   try {
@@ -134,10 +141,9 @@ function Get-ServiceMap {
         $svcmap[$svcPid] += ($_.Name + "(" + $_.DisplayName + ")")
       }
     }
-  } catch { Write-Warn "Service enumeration failed: $($_.Exception.Message)" }
+  } catch { Write-ErrorMsg "Service enumeration failed: $($_.Exception.Message)" }
   $svcmap
 }
-
 function Split-EndPoint {
   param([string]$ep)
   $addr = $ep; $port = $null
@@ -145,19 +151,14 @@ function Split-EndPoint {
   elseif ($ep -match '^(?<h>.+?):(?<p>\d+)$') { $addr = $Matches.h;  $port = $Matches.p }
   ,$addr, $port
 }
-function Classify-Port {
-  param([string]$p, [array]$Rules)
-  if (-not $p -or -not ($p -match '^\d+$')) { return $null }
-  foreach ($r in $Rules) { if ($p -match $r.Regex) { return $r.Label } }
-  $null
-}
+function Classify-Port { param([string]$p, [array]$Rules) if (-not $p -or -not ($p -match '^\d+$')) { return $null }; foreach ($r in $Rules) { if ($p -match $r.Regex) { return $r.Label } }; $null }
 
 function Emit-NetstatMatches {
   $rules   = Get-PortRules
   $procmap = Get-ProcMap
   $svcmap  = Get-ServiceMap
 
-  Write-Log "Collecting sockets via netstat..."
+  Write-Info "Collecting sockets via netstat..."
   $tcp = netstat -ano -p tcp 2>$null
   $udp = netstat -ano -p udp 2>$null
   $lines = @($tcp + $udp)
@@ -190,60 +191,293 @@ function Emit-NetstatMatches {
       if ($parts[-1] -match '^\d+$') { $procId = [int]$parts[-1] } else { continue }
     }
 
-    $null, $lport = Split-EndPoint $local
-    $null, $rport = Split-EndPoint $foreign
+    $lhost,$lport = Split-EndPoint $local
+    $rhost,$rport = Split-EndPoint $foreign
 
     $lp = Classify-Port $lport $rules
     if (-not $lp) { continue }
 
     if ($proto -eq 'TCP') {
       $st = ($state -as [string]).Trim().ToUpperInvariant()
-      if ($st -eq 'LISTENING') {
-      } elseif ($st -eq 'ESTABLISHED') {
-      } else {
-        continue
-      }
+      if ($st -notin @('LISTENING','ESTABLISHED')) { continue }
     }
-
-    $label = $lp
 
     $pname = $procmap[$procId]
     if (-not $pname) { try { $pname = (Get-Process -Id $procId -ErrorAction Stop).ProcessName } catch { $pname = $null } }
     $svc = $null
-    if ($svcmap.ContainsKey($procId)) { $svc = ($svcmap[$procId] -join "; ") }
+    if ($svcmap.ContainsKey($procId)) { $svc = $svcmap[$procId] }
 
     $extra = "pid=$procId"
     if ($pname) { $extra += " proc=$pname" }
-    if ($svc)   { $extra += " svc=$svc"   }
-
-    $out = ("{0,-35} {1,-5} {2,-28} {3,-28} {4}" -f $label,$proto,$local,$foreign,$extra)
+    if ($svc)   { $extra += " svc=$($svc -join '; ')" }
+    $out = ("{0,-35} {1,-5} {2,-28} {3,-28} {4}" -f $lp,$proto,$local,$foreign,$extra)
     Write-Success $out
-  }
-}
 
-function Probe-SAPRoots {
-  Write-Log "Scanning mounted filesystem drives for \usr\sap ..."
-  $fsDrives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -match '^[A-Za-z]$' }
-  foreach ($d in $fsDrives) {
-    $drive = ($d.Name + ':')
-    try {
-      $path = Join-Path -Path $drive -ChildPath 'usr\sap'
-      if ($null -ne $path -and (Test-Path -LiteralPath $path)) {
-        Write-Success "$path"
-      }
-    } catch {
-      Write-Warn "Drive $($d.Name) scan error: $($_.Exception.Message)"
+    Write-NDJSON @{
+      type        = 'socket'
+      label       = $lp
+      proto       = $proto
+      state       = $state
+      local_addr  = $lhost
+      local_port  = $lport
+      remote_addr = $rhost
+      remote_port = $rport
+      pid         = $procId
+      process     = $pname
+      services    = $svc
     }
   }
 }
 
-$null = Test-IsAdmin | ForEach-Object {
-  if (-not $_) { Write-Warn "Not running as Administrator; run elevated if possible" }
+function Format-Arrow { param([int]$Depth)
+  if ($Depth -le 0) { return '' }
+  $hy = 4 * $Depth - 2
+  return ('-' * $hy) + '> '
+}
+function InfoD { param([string]$Msg, [int]$Depth = 1) Write-Info ("{0}{1}" -f (Format-Arrow $Depth), $Msg) }
+function WarnD { param([string]$Msg, [int]$Depth = 1) Write-Warn ("{0}{1}" -f (Format-Arrow $Depth), $Msg) }
+
+
+# Sub-check 
+function SubCheck-SapUsr {
+  param([string]$RootPath)
+
+  $sidRe       = '^[A-Z][A-Z0-9]{2}$'
+  $reserved    = @('SYS','TRANS','SUM','SAPHOSTCTRL','SAPHOSTAGENT','TOOLS')
+  $instanceRe  = '^(?:D|J)\d{2}$|^(?:DVEBMGS)\d{2}$|^(?:ASCS|SCS|ERS|SMDA|HDB|PAS|AAS)\d{2}$'
+
+  $children = @(Get-ChildItem -LiteralPath $RootPath -Directory -Force -ErrorAction SilentlyContinue)
+
+  foreach ($c in $children) {
+    $nameU = $c.Name.ToUpperInvariant()
+
+    if ($reserved -contains $nameU) { continue }
+    if ($nameU -match $instanceRe)  { continue }
+    if ($nameU -notmatch $sidRe)    { continue }
+
+    $sidPath    = $c.FullName
+    $sysRoot    = Join-Path $sidPath 'SYS'
+    $profileDir = Join-Path $sysRoot 'profile'
+    $globalDir  = Join-Path $sysRoot 'global'
+    $rsecRoot   = Join-Path $globalDir 'security\rsecssfs'
+    $keyDir     = Join-Path $rsecRoot  'key'
+    $dataDir    = Join-Path $rsecRoot  'data'
+
+    $instDirs  = @(Get-ChildItem -LiteralPath $sidPath -Directory -Force -ErrorAction SilentlyContinue |
+                   Where-Object { $_.Name -match $instanceRe })
+    $instNames = @($instDirs | ForEach-Object { $_.Name } | Sort-Object)
+
+    $hasSys = $false; $hasProfile = $false; $hasGlobal = $false
+    $hasRsec = $false; $hasKeyDir = $false; $hasDataDir = $false
+    try { $hasSys = Test-Path -LiteralPath $sysRoot -PathType Container } catch {}
+
+    if ($hasSys) {
+      try { $hasProfile = Test-Path -LiteralPath $profileDir -PathType Container } catch {}
+      try { $hasGlobal  = Test-Path -LiteralPath $globalDir  -PathType Container } catch {}
+      if ($hasGlobal) {
+        try { $hasRsec    = Test-Path -LiteralPath $rsecRoot -PathType Container } catch {}
+        if ($hasRsec) {
+          try { $hasKeyDir  = Test-Path -LiteralPath $keyDir  -PathType Container } catch {}
+          try { $hasDataDir = Test-Path -LiteralPath $dataDir -PathType Container } catch {}
+        }
+      }
+    }
+
+    $isValid = $hasProfile -or ($instNames.Count -gt 0)
+
+    if ($isValid) {
+      Write-Success ("SID {0} @ {1}" -f $nameU, $sidPath)
+
+      if ($instNames.Count -gt 0) {
+        InfoD ("Instances ({0}): {1}" -f $instNames.Count, ($instNames -join ', ')) 1
+      }
+
+      if (-not $hasSys) {
+        WarnD "SYS missing (often centralized/not mounted); skipping SYS checks" 1
+      } else {
+        InfoD "SYS present" 1
+
+        $profileState = if ($hasProfile) { 'present' } else { 'missing' }
+        $globalState  = if ($hasGlobal)  { 'present' } else { 'missing' }
+        InfoD ("profile: {0}" -f $profileState) 2
+        InfoD ("global: {0}"  -f $globalState)  2
+
+        if ($hasGlobal) {
+          if ($hasRsec) {
+            InfoD "global\security\rsecssfs: present" 3
+
+            $keys  = @()
+            $datas = @()
+            if ($hasKeyDir) {
+              $keys = @(Get-ChildItem -LiteralPath $keyDir -File -Force -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -match '^SSFS_.+\.KEY$' } | ForEach-Object { $_.Name } | Sort-Object)
+              if ($keys.Count -gt 0) { InfoD ("key files ({0}): {1}" -f $keys.Count, ($keys -join ', ')) 4 }
+              else { WarnD "key directory present but no SSFS_*.KEY files" 3 }
+            } else {
+              WarnD "key directory missing" 3
+            }
+
+            if ($hasDataDir) {
+              $datas = @(Get-ChildItem -LiteralPath $dataDir -File -Force -ErrorAction SilentlyContinue |
+                         Where-Object { $_.Name -match '^SSFS_.+\.DAT$' } | ForEach-Object { $_.Name } | Sort-Object)
+              if ($datas.Count -gt 0) { InfoD ("data files ({0}): {1}" -f $datas.Count, ($datas -join ', ')) 4 }
+              else { WarnD "data directory present but no SSFS_*.DAT files" 3 }
+            } else {
+              WarnD "data directory missing" 3
+            }
+
+            Write-NDJSON @{
+              type                 = 'sid'
+              sid                  = $nameU
+              path                 = $sidPath
+              instances            = $instNames
+              has_sys              = $hasSys
+              has_sys_profile      = $hasProfile
+              has_sys_global       = $hasGlobal
+              rsecssfs_present     = $hasRsec
+              rsecssfs_key_files   = $keys
+              rsecssfs_data_files  = $datas
+            }
+          } else {
+            WarnD "global\security\rsecssfs missing" 3
+            Write-NDJSON @{
+              type            = 'sid'
+              sid             = $nameU
+              path            = $sidPath
+              instances       = $instNames
+              has_sys         = $hasSys
+              has_sys_profile = $hasProfile
+              has_sys_global  = $hasGlobal
+              rsecssfs_present= $false
+            }
+          }
+        } else {
+          Write-NDJSON @{
+            type            = 'sid'
+            sid             = $nameU
+            path            = $sidPath
+            instances       = $instNames
+            has_sys         = $hasSys
+            has_sys_profile = $hasProfile
+            has_sys_global  = $false
+            rsecssfs_present= $false
+          }
+        }
+      }
+    } else {
+      Write-Warn ("Candidate SID-like folder {0} (no profile/instances)" -f $nameU)
+      Write-NDJSON @{
+        type   = 'sid_candidate'
+        sid    = $nameU
+        path   = $sidPath
+        reason = 'no_profile_or_instances'
+      }
+    }
+  }
 }
 
-Write-Log "Starting audit"
+function SubCheck-Sapinst {
+  param([string]$RootPath)
+  # TODO: scan for installer logs, control files, etc.
+  # $files = Get-ChildItem -LiteralPath $RootPath -File -Force -ErrorAction SilentlyContinue
+  # foreach ($f in $files) {
+  #   Write-NDJSON @{ type='sapinst_sub'; parent=$RootPath; file=$f.Name; size=$f.Length; path=$f.FullName }
+  # }
+}
+
+# (only if not already defined elsewhere)
+if (-not (Get-Variable -Name PathSpecs -Scope Script -ErrorAction SilentlyContinue)) {
+  $script:PathSpecs = @(
+    @{
+      Key       = 'sap_usr'
+      ChildPath = 'usr\sap'
+      SubCheck  = ${function:SubCheck-SapUsr}
+    },
+    @{
+      Key       = 'sapinst_instdir'
+      ChildPath = 'Program Files\sapinst_instdir'
+      SubCheck  = ${function:SubCheck-Sapinst}
+    }
+  )
+}
+
+function Probe-ConfiguredPaths {
+  param([array]$Specs)
+
+  Write-Info "Scanning mounted filesystem drives for configured SAP paths..."
+  $fsDrives = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -match '^[A-Za-z]$' }
+
+  foreach ($spec in $Specs) {
+    $key      = $spec.Key
+    $child    = $spec.ChildPath
+    $subCheck = $spec.SubCheck
+
+    foreach ($d in $fsDrives) {
+      $drive = ($d.Name + ':')
+      try {
+        $candidate = Join-Path -Path $drive -ChildPath $child
+        if ($null -ne $candidate -and (Test-Path -LiteralPath $candidate)) {
+          Write-Success $candidate
+          Write-NDJSON @{
+            type  = 'path'
+            key   = $key
+            drive = $drive
+            child = $child
+            path  = $candidate
+          }
+
+          if ($subCheck) {
+            try { & $subCheck $candidate }
+            catch {
+              $msg = $_.Exception.Message
+              Write-ErrorMsg ("SubCheck for '{0}' failed on {1}: {2}" -f $key, $candidate, $msg)
+              Write-NDJSON @{ type='subcheck_error'; key=$key; path=$candidate; error=$msg }
+            }
+          }
+        }
+      } catch {
+        $msg = $_.Exception.Message
+        Write-Warn ("Drive {0} scan error for '{1}/{2}': {3}" -f $d.Name, $key, $child, $msg)
+        Write-NDJSON @{
+          type  = 'probe_error'
+          key   = $key
+          drive = $drive
+          child = $child
+          error = $msg
+        }
+      }
+    }
+  }
+}
+
+function Probe-SAPRoots {
+  if (-not $script:PathSpecs) { $script:PathSpecs = @() }
+  Probe-ConfiguredPaths -Specs $script:PathSpecs
+}
+
+Write-NDJSON @{
+  type        = 'meta'
+  phase       = 'start'
+  timestamp   = (Get-Date).ToString('s')
+  host        = $env:COMPUTERNAME
+  username    = $env:USERNAME
+  is_admin    = [bool]$IsAdmin
+  ndjson_path = $script:NDJPath
+  version     = '1.2-ndjson-only'
+}
+
+Write-Info "Starting audit"
 Emit-NetstatMatches
 Probe-SAPRoots
-Write-Log "Done."
-Write-Log ("Saved log to: {0}" -f $script:LogPath)
+Write-Info "Done."
+
+Write-NDJSON @{
+  type        = 'meta'
+  phase       = 'end'
+  timestamp   = (Get-Date).ToString('s')
+  ndjson_path = $script:NDJPath
+  stats       = @{}
+}
+
+Write-Success ("Results saved. NDJSON: {0}" -f $script:NDJPath)
 
