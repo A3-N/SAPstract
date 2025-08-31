@@ -237,7 +237,6 @@ function Format-Arrow { param([int]$Depth)
 function InfoD { param([string]$Msg, [int]$Depth = 1) Write-Info ("{0}{1}" -f (Format-Arrow $Depth), $Msg) }
 function WarnD { param([string]$Msg, [int]$Depth = 1) Write-Warn ("{0}{1}" -f (Format-Arrow $Depth), $Msg) }
 
-
 # Sub-check 
 function SubCheck-SapUsr {
   param([string]$RootPath)
@@ -376,14 +375,14 @@ function SubCheck-SapUsr {
   }
 }
 
-function SubCheck-Sapinst {
-  param([string]$RootPath)
+#function SubCheck-Sapinst {
+#  param([string]$RootPath)
   # TODO: scan for installer logs, control files, etc.
   # $files = Get-ChildItem -LiteralPath $RootPath -File -Force -ErrorAction SilentlyContinue
   # foreach ($f in $files) {
   #   Write-NDJSON @{ type='sapinst_sub'; parent=$RootPath; file=$f.Name; size=$f.Length; path=$f.FullName }
   # }
-}
+#}
 
 # (only if not already defined elsewhere)
 if (-not (Get-Variable -Name PathSpecs -Scope Script -ErrorAction SilentlyContinue)) {
@@ -392,11 +391,11 @@ if (-not (Get-Variable -Name PathSpecs -Scope Script -ErrorAction SilentlyContin
       Key       = 'sap_usr'
       ChildPath = 'usr\sap'
       SubCheck  = ${function:SubCheck-SapUsr}
-    },
-    @{
-      Key       = 'sapinst_instdir'
-      ChildPath = 'Program Files\sapinst_instdir'
-      SubCheck  = ${function:SubCheck-Sapinst}
+    #},
+    #@{
+    #  Key       = 'sapinst_instdir'
+    #  ChildPath = 'Program Files\sapinst_instdir'
+    #  SubCheck  = ${function:SubCheck-Sapinst}
     }
   )
 }
@@ -466,9 +465,270 @@ Write-NDJSON @{
   version     = '1.2-ndjson-only'
 }
 
+# Tool specs 
+if (-not (Get-Variable -Name ToolSpecs -Scope Script -ErrorAction SilentlyContinue)) {
+  $script:ToolSpecs = @(
+    @{
+      Key      = 'sap_mmc'
+      Name     = 'SAP MMC SnapIn'
+      BaseEnv  = @('ProgramFiles','ProgramW6432')   # prefer 64-bit Program Files
+      RelPath  = 'SAP\SAP MMC SnapIn\sapmmc.msc'
+      Kind     = 'file'
+    },
+    @{
+      Key      = 'sap_gui_logon'
+      Name     = 'SAP GUI Logon'
+      BaseEnv  = @('ProgramFiles(x86)','ProgramFiles')  # GUI is often 32-bit; fall back to 64-bit if needed
+      RelPath  = 'SAP\FrontEnd\SAPgui\saplogon.exe'
+      Kind     = 'file'
+    }
+  )
+}
+
+function Get-EnvValue {
+  param([string]$Name)
+  return [Environment]::GetEnvironmentVariable($Name)
+}
+function Test-LeafOrContainer {
+  param([string]$Path, [string]$Kind) 
+  if ($Kind -eq 'dir')  { return (Test-Path -LiteralPath $Path -PathType Container) }
+  else                  { return (Test-Path -LiteralPath $Path -PathType Leaf) }
+}
+
+function Tool-Check {
+  param([array]$Specs = $script:ToolSpecs)
+
+  Write-Info "SAP tools check"
+
+  foreach ($spec in $Specs) {
+    $key     = $spec.Key
+    $name    = $spec.Name
+    $kind    = $spec.Kind
+    $rel     = $spec.RelPath
+    $bases   = @($spec.BaseEnv)
+
+    $resolved = $null
+    $baseUsed = $null
+    foreach ($b in $bases) {
+      $base = Get-EnvValue $b
+      if ([string]::IsNullOrWhiteSpace($base)) { continue }
+      $candidate = Join-Path -Path $base -ChildPath $rel
+      try {
+        if (Test-LeafOrContainer -Path $candidate -Kind $kind) {
+          $resolved = $candidate
+          $baseUsed = $b
+          break
+        }
+      } catch {}
+    }
+
+    Write-Success ("Tool {0}" -f $name)
+
+    if ($resolved) {
+      $size = $null; $version = $null
+      try {
+        $item = Get-Item -LiteralPath $resolved -ErrorAction SilentlyContinue
+        if ($item -and $item.PSIsContainer -eq $false) {
+          $size    = $item.Length
+          $version = $item.VersionInfo.FileVersion
+          if (-not $version) { $version = $item.VersionInfo.ProductVersion }
+        }
+      } catch {}
+
+      InfoD ("present @ {0}" -f $resolved) 1
+      if ($version) { InfoD ("version: {0}" -f $version) 2 }
+      if ($size)    { InfoD ("size: {0} bytes" -f $size) 2 }
+
+      Write-NDJSON @{
+        type          = 'tool'
+        key           = $key
+        name          = $name
+        expected_base = $baseUsed
+        expected_rel  = $rel
+        found_path    = $resolved
+        exists        = $true
+        kind          = $kind
+        version       = $version
+        size_bytes    = $size
+      }
+    } else {
+      $exp = @()
+      foreach ($b in $bases) {
+        $base = Get-EnvValue $b
+        if (-not [string]::IsNullOrWhiteSpace($base)) {
+          $exp += (Join-Path -Path $base -ChildPath $rel)
+        }
+      }
+      if ($exp.Count -eq 0) {
+        WarnD ("missing; base env(s) not set: {0}" -f (($bases -join ', '))) 1
+      } else {
+        WarnD ("missing; checked: {0}" -f (($exp -join ' | '))) 1
+      }
+
+      Write-NDJSON @{
+        type          = 'tool'
+        key           = $key
+        name          = $name
+        expected_rel  = $rel
+        expected_bases= $bases
+        exists        = $false
+        kind          = $kind
+      }
+    }
+  }
+}
+
+# Registry SID env check (HKLM:\SOFTWARE\[WOW6432Node]\SAP)
+function Sap-Registry-Check {
+  Write-Info "SAP registry check (HKLM:\\SOFTWARE\\[WOW6432Node]\\SAP)"
+
+  $sidRe  = '^[A-Z][A-Z0-9]{2}$'
+  $roots  = @('HKLM:\SOFTWARE\SAP','HKLM:\SOFTWARE\WOW6432Node\SAP')
+
+  foreach ($regRoot in $roots) {
+    $rootExists = $false
+    try { $rootExists = Test-Path -LiteralPath $regRoot -PathType Container } catch {
+      WarnD ("cannot access root {0}: {1}" -f $regRoot, $_.Exception.Message) 1
+      continue
+    }
+    if (-not $rootExists) {
+      InfoD ("root not found: {0}" -f $regRoot) 1
+      continue
+    }
+
+    $sidKeys = @()
+    try {
+      $sidKeys = @(Get-ChildItem -Path $regRoot -ErrorAction Stop | Where-Object { $_.PSChildName -match $sidRe })
+    } catch {
+      WarnD ("enumeration failed at {0}: {1}" -f $regRoot, $_.Exception.Message) 1
+      continue
+    }
+
+    if ($sidKeys.Count -eq 0) {
+      InfoD ("no SID keys under {0}" -f $regRoot) 1
+      continue
+    }
+
+    foreach ($k in $sidKeys) {
+      $sid = $k.PSChildName.ToUpperInvariant()
+      Write-Success ("Registry SID {0}" -f $sid)
+
+      $envPath  = Join-Path $k.PSPath 'Environment'
+      $envProps = $null
+      try {
+        $envProps = Get-ItemProperty -Path $envPath -ErrorAction Stop
+      } catch {
+        WarnD ("Environment subkey missing/unreadable at {0}: {1}" -f $envPath, $_.Exception.Message) 1
+        Write-NDJSON @{ type='reg_sid'; sid=$sid; reg_path=$envPath; hive=$regRoot; has_env=$false }
+        continue
+      }
+
+      $sapSysName = $envProps.SAPSYSTEMNAME
+      $sapLocal   = $envProps.SAPLOCALHOST
+      $dbmsType   = $envProps.DBMS_TYPE
+      $sapExe     = $envProps.SAPEXE
+      $rsecData   = $envProps.RSEC_SSFS_DATAPATH
+      $rsecKey    = $envProps.RSEC_SSFS_KEYPATH
+      $tmp        = $envProps.TMP
+      $temp       = $envProps.TEMP
+
+      $sapSysNameStr = if ([string]::IsNullOrEmpty($sapSysName)) { '<none>' } else { $sapSysName }
+      InfoD ("SAPSYSTEMNAME: {0}" -f $sapSysNameStr) 1
+      if ($sapSysName -and ($sapSysName.ToUpperInvariant() -ne $sid)) {
+        WarnD ("SAPSYSTEMNAME mismatch: {0} (reg) vs {1} (key)" -f $sapSysName, $sid) 2
+      }
+      if ($sapLocal) { InfoD ("SAPLOCALHOST: {0}" -f $sapLocal) 1 }
+      if ($dbmsType) { InfoD ("DBMS_TYPE: {0}"  -f $dbmsType) 1 }
+      if ($sapExe)   { InfoD ("SAPEXE: {0}"     -f $sapExe)   1 }
+      if ($rsecKey)  { InfoD ("RSEC_SSFS_KEYPATH: {0}"  -f $rsecKey)  1 }
+      if ($rsecData) { InfoD ("RSEC_SSFS_DATAPATH: {0}" -f $rsecData) 1 }
+      if ($temp)     { InfoD ("TEMP: {0}" -f $temp) 1 }
+      if ($tmp)      { InfoD ("TMP: {0}"  -f $tmp)  1 }
+
+      Write-NDJSON @{
+        type               = 'reg_sid'
+        sid                = $sid
+        hive               = $regRoot
+        reg_path           = $k.PSPath
+        has_env            = $true
+        SAPSYSTEMNAME      = $sapSysName
+        SAPLOCALHOST       = $sapLocal
+        DBMS_TYPE          = $dbmsType
+        SAPEXE             = $sapExe
+        RSEC_SSFS_KEYPATH  = $rsecKey
+        RSEC_SSFS_DATAPATH = $rsecData
+        TEMP               = $temp
+        TMP                = $tmp
+      }
+    }
+  }
+}
+
+#  ADM user ↔ Windows SID check (ProfileList)
+function AdmUser-Check {
+  Write-Info "SAP <SID>adm profile check (ProfileList)"
+
+  $profileRoot = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\*'
+  $re          = '\\Users\\([A-Za-z][A-Za-z0-9]{2})adm$'
+
+  $profiles = @()
+  try {
+    $profiles = @(Get-ItemProperty $profileRoot -ErrorAction Stop)
+  } catch {
+    WarnD ("cannot read ProfileList: {0}" -f $_.Exception.Message) 1
+    return
+  }
+
+  $found = 0
+
+  foreach ($p in $profiles) {
+    $pip = $p.ProfileImagePath
+    if (-not $pip) { continue }
+
+    $m = [regex]::Match($pip, $re, 'IgnoreCase')
+    if (-not $m.Success) { continue }
+
+    $sid3   = $m.Groups[1].Value.ToUpperInvariant()
+    $user   = "$sid3" + "adm"
+    $winSid = $null
+    try { $winSid = Split-Path $p.PSPath -Leaf } catch {}
+
+    $found += 1
+
+    Write-Success ("ADM profile {0}" -f $user)
+    InfoD ("profile path: {0}" -f $pip) 1
+    if ($winSid) { InfoD ("windows SID: {0}" -f $winSid) 1 }
+
+    $localExists = $false
+    try {
+      $lu = Get-LocalUser -Name $user -ErrorAction SilentlyContinue
+      if ($lu) { $localExists = $true; InfoD "local user exists" 1 }
+    } catch {
+      WarnD ("Get-LocalUser failed for {0}: {1}" -f $user, $_.Exception.Message) 1
+    }
+
+    Write-NDJSON @{
+      type             = 'adm_profile'
+      sid              = $sid3
+      username         = $user
+      profile_path     = $pip
+      windows_sid      = $winSid
+      local_user_exist = $localExists
+    }
+  }
+
+  if ($found -eq 0) {
+    WarnD "no <SID>adm profiles found" 1
+    Write-NDJSON @{ type='adm_profile_summary'; count=0 }
+  }
+}
+
 Write-Info "Starting audit"
 Emit-NetstatMatches
 Probe-SAPRoots
+Tool-Check
+Sap-Registry-Check
+AdmUser-Check
 Write-Info "Done."
 
 Write-NDJSON @{
