@@ -134,7 +134,7 @@ function Write-Banner {
      @%.                                     +@@@@@@                      \033[97mpysap      — OWASP\033[94m
      @-                   -@@%%%@@+          +@@@@
      @@@#+=-. .-=@@@@@@@@@@@@@@@@@+=@@@#@@@@@@@@
-     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                          \033[97mDeveloped while doing ur mom, loser\033[94m
+     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                          \033[97mRead-only host-local SAP posture assessment\033[94m
 '@
     $banner = $banner.Replace('\033[94m', $blue).Replace('\033[97m', $white)
     [Console]::WriteLine($banner.Trim([char[]]"`r`n") + $reset + [Environment]::NewLine)

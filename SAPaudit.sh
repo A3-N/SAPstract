@@ -95,7 +95,7 @@ show_banner() {
   printf '%s%s%s%s\n' "$blue" '     @%.                                     +@@@@@@                      ' "$white" 'pysap      — OWASP'
   printf '%s\n' "${blue}     @-                   -@@%%%@@+          +@@@@"
   printf '%s\n' "${blue}     @@@#+=-. .-=@@@@@@@@@@@@@@@@@+=@@@#@@@@@@@@"
-  printf '%s%s%s%s\n' "$blue" '     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                          ' "$white" 'Developed while doing ur mom, loser'
+  printf '%s%s%s%s\n' "$blue" '     @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@                          ' "$white" 'Read-only host-local SAP posture assessment'
   printf '%s\n\n' "$reset"
 }
 
@@ -545,6 +545,12 @@ is_wildcard() {
   [[ -z "$addr" || "$addr" == "*" || "$addr" == "0.0.0.0" || "$addr" == "::" || "$addr" == "0:0:0:0:0:0:0:0" ]]
 }
 
+is_collected_sap_pid() {
+  local pid=${1-}
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  [[ -n "${SAP_PIDS[$pid]+x}" ]]
+}
+
 record_socket() {
   local protocol=$1 state=$2 local_ep=$3 remote_ep=$4 pid=${5-} process=${6-} service=${7-}
   endpoint_parts "$local_ep"; local local_addr=$EP_ADDR local_port=$EP_PORT
@@ -566,7 +572,7 @@ record_socket() {
     fi
   fi
   if [[ -z "$classification" ]]; then
-    if [[ -n "${SAP_PIDS[$pid]+x}" ]] || is_sap_process "$process $service"; then
+    if is_collected_sap_pid "$pid" || is_sap_process "$process $service"; then
       classification=$(component_for_process "$process $service")
       transport="unclassified"
       sensitivity="unknown"
@@ -586,7 +592,9 @@ record_socket() {
       ;;
   esac
 
-  [[ -n "$process" ]] || process=${SAP_PROCESS_BY_PID[$pid]-}
+  if [[ -z "$process" ]] && is_collected_sap_pid "$pid"; then
+    process=${SAP_PROCESS_BY_PID[$pid]-}
+  fi
   if [[ "${process,,} ${service,,}" =~ (^|[[:space:]/\\])(enserver|enrepserver)([[:space:]/\\]|$) ]]; then
     classification="SAP Enqueue Server"
     transport="SAP Enqueue/NI"
@@ -1707,7 +1715,7 @@ build_topology_model() {
     [[ "$exposure" == "connected" && -n "$remote_ep" ]] && endpoint="$local_ep → $remote_ep"
     add_service_map_entry "$category" "$component" "$status" "$endpoint" "$exposure" "$transport" "${process:-$service}" "socket"
     socket_confidence="medium"
-    if [[ -n "${SAP_PIDS[$pid]+x}" ]] || is_sap_process "$process $service"; then socket_confidence="high"; fi
+    if is_collected_sap_pid "$pid" || is_sap_process "$process $service"; then socket_confidence="high"; fi
 
     endpoint_parts "$local_ep"; local_addr=$EP_ADDR; local_port=$EP_PORT
     if [[ "${state^^}" =~ ^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$ ]]; then
