@@ -80,7 +80,9 @@ not bundled in this repository or Python distribution.
 
 - SAP services and processes, executable paths and service accounts.
 - Listening and connected sockets, including SAP port families and SAP-owned
-  processes on nonstandard ports.
+  processes on nonstandard ports. Port numbers alone are not promoted as SAP:
+  accepted sockets require an SAP process owner, a discovered SID/instance
+  match, a dedicated SAP port, or matching product runtime evidence.
 - An evidence-backed mini topology graph that groups enabled/observed SAP
   services, maps established peers, and distinguishes locally observed,
   remotely observed, configured-only and undetermined database placement.
@@ -225,10 +227,14 @@ small screen.
 The JSON contains the backward-compatible `risk_score`, `risk_grade` and
 `risk_label`, an executive `summary`, the five numeric `section_scores`, and
 the same evidence in stable top-level arrays: `findings`, `systems`,
-`services`, `processes`, `sockets`, `paths`, `ssfs`, `tools`, `profiles`,
-`coverage` and `assessment_catalog`. The additive `topology` object contains
-`database_posture`, `nodes`, `edges`, categorized `services`, `capabilities`
-and `databases`.
+`services`, `processes`, `sockets`, `socket_candidates`, `paths`, `ssfs`,
+`tools`, `profiles`, `coverage` and `assessment_catalog`. Accepted socket rows
+include `confidence` and `basis`. Ownerless SAP-shaped ports that cannot be
+corroborated remain in `socket_candidates`; they cannot create findings,
+topology edges, capabilities or SAP evidence. A visible non-SAP process owner
+rejects the port match instead of retaining routine ephemeral-port noise. The
+additive `topology` object contains `database_posture`, `nodes`, `edges`,
+categorized `services`, `capabilities` and `databases`.
 
 Scoring is deterministic:
 
@@ -257,6 +263,7 @@ Before deployment, validate syntax and run a scoped local collection:
 
 ```bash
 bash -n SAPaudit.sh
+./tests/test-audit-correlation.sh
 ./SAPaudit.sh --help
 ./SAPaudit.sh --output-dir /tmp/sapstract-live
 jq '.schema, .risk_score, .coverage, .assessment_catalog' \
@@ -268,6 +275,7 @@ $null = [System.Management.Automation.Language.Parser]::ParseFile(
   (Resolve-Path .\SAPaudit.ps1), [ref]$null, [ref]$parseErrors
 )
 $parseErrors
+.\tests\Test-AuditCorrelation.ps1
 .\SAPaudit.ps1 -OutputDirectory "$env:TEMP\sapstract-live"
 ```
 

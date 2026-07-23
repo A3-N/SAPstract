@@ -60,6 +60,8 @@ $script:IsWindowsHost = ($env:OS -eq 'Windows_NT')
 $script:CustomRoot = -not [string]::IsNullOrWhiteSpace($RootPath)
 $script:RiskScore = 0
 $script:SapEvidenceCount = 0
+$script:SapServerEvidenceCount = 0
+$script:SocketCandidateCount = 0
 $script:TruncatedScans = 0
 $script:SeenFinding = @{}
 $script:SeenPath = @{}
@@ -68,6 +70,9 @@ $script:SeenTool = @{}
 $script:SeenSystem = @{}
 $script:SapPids = @{}
 $script:SapProcessByPid = @{}
+$script:SapSids = @{}
+$script:SapInstanceNumbers = @{}
+$script:SapProductContext = @{}
 $script:SsfsData = @{}
 $script:SsfsKey = @{}
 $script:SsfsFamily = @{}
@@ -83,6 +88,7 @@ $script:Tables = [ordered]@{
     Services = New-Object System.Collections.Generic.List[object]
     Processes = New-Object System.Collections.Generic.List[object]
     Sockets = New-Object System.Collections.Generic.List[object]
+    SocketCandidates = New-Object System.Collections.Generic.List[object]
     Paths = New-Object System.Collections.Generic.List[object]
     Ssfs = New-Object System.Collections.Generic.List[object]
     Tools = New-Object System.Collections.Generic.List[object]
@@ -289,7 +295,7 @@ function Get-PathEvidence {
 
 function Test-WeakWindowsAcl {
     param([string]$Path, [string]$Category)
-    if (-not $script:IsWindowsHost) { return }
+    if (-not $script:IsWindowsHost -or $Category -eq 'SAP root/product') { return }
     try {
         $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
         foreach ($entry in $acl.Access) {
@@ -416,18 +422,76 @@ function Add-PathEvidence {
     $script:SapEvidenceCount++
 }
 
-function Test-SapProcessText {
+function Register-SapInstance {
+    param([string]$Sid, [string]$InstanceNumber = '')
+    if ($Sid -match '^(?i)[A-Z][A-Z0-9]{2}$') { $script:SapSids[$Sid.ToUpperInvariant()] = $true }
+    if ($InstanceNumber -match '^\d{2}$') { $script:SapInstanceNumbers[$InstanceNumber] = $true }
+}
+
+function Test-SapRegistrySidEvidence {
+    param([string]$Sid, [object]$EnvironmentProperties)
+    if ($Sid -notmatch '^(?i)[A-Z][A-Z0-9]{2}$' -or $null -eq $EnvironmentProperties) {
+        return $false
+    }
+    $property = $EnvironmentProperties.PSObject.Properties['SAPSYSTEMNAME']
+    return ($null -ne $property -and [string]$property.Value -ieq $Sid)
+}
+
+function Test-SapNativeProcessText {
     param([string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
-    return ($Text -match '(?i)(^|[\s/\\])(disp\+work|dw\.sap|gwrd|ms\.sap|enserver|enrepserver|icman|igswd_mt|igsmux|sapstartsrv(\.exe)?|saphostexec(\.exe)?|saphostctrl(\.exe)?|saposcol(\.exe)?|saprouter(\.exe)?|sapwebdisp(\.exe)?|jstart(\.exe)?|jlaunch(\.exe)?|hdbdaemon|hdbnameserver|hdbindexserver|hdbcompileserver|hdbpreprocessor|hdbxsengine|hdbscriptserver|hdbwebdispatcher|hdbesserver|hdbdocstore|hdbdpserver|hdbdiserver|dataserver|backupserver|bcksrvr(\.exe)?|oracle|ora_[a-z0-9_]+|tnslsnr|db2sysc|db2wdog|sqlservr(\.exe)?|dbmsrv|x_server|sapinst|sapup|r3trans(\.exe)?|tp(\.exe)?|scc_daemon|cloud.?connector)([\s/\\]|$)' -or
-            $Text -match '(?i)[/\\](usr[/\\]sap|sapmnt|sap[/\\]hostctrl|oracle|db2|sapdb|maxdb)[/\\]')
+    return ($Text -match '(?i)(^|[\s/\\])(disp\+work|dw\.sap|gwrd|ms\.sap|enserver|enrepserver|icman|igswd_mt|igsmux|sapstartsrv(\.exe)?|saphostexec(\.exe)?|saphostctrl(\.exe)?|saposcol(\.exe)?|saprouter(\.exe)?|sapwebdisp(\.exe)?|jstart(\.exe)?|jlaunch(\.exe)?|hdbdaemon|hdbnameserver|hdbindexserver|hdbcompileserver|hdbpreprocessor|hdbxsengine|hdbscriptserver|hdbwebdispatcher|hdbesserver|hdbdocstore|hdbdpserver|hdbdiserver|sapinst|sapup|r3trans(\.exe)?|scc_daemon|cloud.?connector)([\s/\\]|$)' -or
+            $Text -match '(?i)[/\\](usr[/\\]sap|sapmnt|sap[/\\]hostctrl|sapdb|maxdb|hana[/\\](shared|data|log))[/\\]')
+}
+
+function Test-SapDatabaseProcessCandidateText {
+    param([string]$Text)
+    return ($Text -match '(?i)(^|[\s/\\])(dataserver(\.exe)?|backupserver(\.exe)?|bcksrvr(\.exe)?|jsagent(\.exe)?|oracle|ora_[a-z0-9_]+|tnslsnr|db2sysc|db2wdog|sqlservr(\.exe)?|dbmsrv|x_server|tp(\.exe)?)([\s/\\]|$)')
+}
+
+function Test-SapDatabaseProcessText {
+    param([string]$Text, [string]$Account = '')
+    if (-not (Test-SapDatabaseProcessCandidateText $Text)) { return $false }
+    foreach ($sid in @($script:SapSids.Keys)) {
+        $escaped = [regex]::Escape([string]$sid)
+        if ($Account -match "(?i)(^|[\\/@])(SAPService)?$escaped(adm)?$" -or
+            $Account -match "(?i)(^|[\\/@])ora$escaped$" -or
+            $Account -match "(?i)(^|[\\/@])syb$escaped$" -or
+            $Text -match "(?i)[/\\]oracle[/\\]$escaped[/\\]" -or
+            $Text -match "(?i)[/\\]sybase[/\\]$escaped[/\\]" -or
+            $Text -match "(?i)ora_(pmon|smon)_$escaped(\s|$)") {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-SapProcessText {
+    param([string]$Text, [string]$Account = '')
+    return ((Test-SapNativeProcessText $Text) -or (Test-SapDatabaseProcessText $Text $Account))
+}
+
+function Test-SapServiceEvidence {
+    param([string]$Name, [string]$Description = '', [string]$Path = '')
+    $text = "$Name $Description $Path"
+    return ($Name -match '^(?i)SAP[A-Z0-9]{3}_\d{2}$' -or
+            $Name -match '^(?i)(SAP(Host(Control|Exec)?|Router|WebDisp|OsCol|StartSrv)|HDB|HANA)[A-Z0-9_.@-]*$' -or
+            $text -match '(?i)(^|[\s_.:/\\-])(SAP|HANA|HDB|Cloud[\s_.-]*Connector)([\s_.:/\\-]|$)' -or
+            $Path -match '(?i)[/\\](usr[/\\]sap|program files[/\\]sap)[/\\]')
+}
+
+function Test-SapServerServiceEvidence {
+    param([string]$Name, [string]$Path = '')
+    return ($Name -match '^(?i)SAP[A-Z0-9]{3}_\d{2}(\.service)?$' -or
+            $Name -match '^(?i)(SAP(Host(Control|Exec)?|Router|WebDisp|OsCol|StartSrv)|HDB|HANA)[A-Z0-9_.@-]*(\.service)?$' -or
+            $Path -match '(?i)[/\\](usr[/\\]sap|sapmnt|hana[/\\](shared|data|log)|sybase|oracle|db2)[/\\]')
 }
 
 function Get-SapComponent {
     param([string]$Text)
     switch -Regex ($Text) {
         '(?i)hdb' { return 'SAP HANA' }
-        '(?i)(dataserver|backupserver|bcksrvr)' { return 'SAP ASE' }
+        '(?i)(dataserver|backupserver|bcksrvr|jsagent)' { return 'SAP ASE' }
         '(?i)(ora_pmon|tnslsnr|[/\\]oracle[/\\]|\boracle\b)' { return 'Oracle Database' }
         '(?i)(db2sysc|db2wdog|[/\\]db2[/\\])' { return 'IBM Db2' }
         '(?i)sqlservr' { return 'Microsoft SQL Server' }
@@ -466,13 +530,22 @@ function Collect-Processes {
         try {
             foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
                 $text = "$($process.Name) $($process.ExecutablePath) $($process.CommandLine)"
-                if (-not (Test-SapProcessText $text)) { continue }
+                if (-not (Test-SapNativeProcessText $text) -and
+                    -not (Test-SapDatabaseProcessCandidateText $text)) {
+                    continue
+                }
                 $account = ''
                 try {
                     $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwner -ErrorAction Stop
                     if ($owner.ReturnValue -eq 0) { $account = "$($owner.Domain)\$($owner.User)" }
                 } catch {}
+                if (-not (Test-SapProcessText $text $account)) { continue }
                 $component = Get-SapComponent $text
+                switch ($component) {
+                    'SAP ASE' { $script:SapProductContext['ase'] = $true }
+                    'SAP Software Provisioning Manager' { $script:SapProductContext['installer'] = $true }
+                    'SAP Software Update Manager' { $script:SapProductContext['upgrade'] = $true }
+                }
                 Add-TableRow Processes ([ordered]@{
                     pid = [string]$process.ProcessId; user = $account; group = ''; name = $process.Name
                     executable = $process.ExecutablePath; command = $process.CommandLine; component = $component
@@ -480,6 +553,7 @@ function Collect-Processes {
                 $script:SapPids[[string]$process.ProcessId] = $true
                 $script:SapProcessByPid[[string]$process.ProcessId] = [string]$process.Name
                 $script:SapEvidenceCount++
+                $script:SapServerEvidenceCount++
                 Test-ProcessSecurity ([string]$process.Name) ([string]$process.CommandLine)
                 if ($process.ExecutablePath) { Add-PathEvidence $process.ExecutablePath 'Executable' "Running $component binary" }
             }
@@ -494,10 +568,15 @@ function Collect-Processes {
                 if ($line -notmatch '^\s*(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s*(.*)$') { continue }
                 $pidValue = $Matches[1]; $user = $Matches[2]; $group = $Matches[3]
                 $name = $Matches[4]; $command = $Matches[5]
-                if (-not (Test-SapProcessText "$name $command")) { continue }
+                if (-not (Test-SapProcessText "$name $command" $user)) { continue }
                 $exe = ''
                 try { $exe = (& readlink "/proc/$pidValue/exe" 2>$null) } catch {}
                 $component = Get-SapComponent "$name $exe $command"
+                switch ($component) {
+                    'SAP ASE' { $script:SapProductContext['ase'] = $true }
+                    'SAP Software Provisioning Manager' { $script:SapProductContext['installer'] = $true }
+                    'SAP Software Update Manager' { $script:SapProductContext['upgrade'] = $true }
+                }
                 Add-TableRow Processes ([ordered]@{
                     pid = $pidValue; user = $user; group = $group; name = $name
                     executable = $exe; command = $command; component = $component
@@ -505,6 +584,7 @@ function Collect-Processes {
                 $script:SapPids[$pidValue] = $true
                 $script:SapProcessByPid[$pidValue] = $name
                 $script:SapEvidenceCount++
+                $script:SapServerEvidenceCount++
                 Test-ProcessSecurity $name $command
                 if ($exe) { Add-PathEvidence $exe 'Executable' "Running $component binary" }
             }
@@ -519,15 +599,19 @@ function Collect-Services {
     Write-AuditLog 'Collecting SAP services'
     if ($script:IsWindowsHost) {
         try {
-            $services = @(Get-CimInstance Win32_Service -ErrorAction Stop | Where-Object {
-                "$($_.Name) $($_.DisplayName) $($_.PathName)" -match '(?i)(SAP|HANA|HDB|Sybase|Cloud.?Connector|\bSCC\b)'
-            })
-            foreach ($service in $services) {
+            foreach ($service in @(Get-CimInstance Win32_Service -ErrorAction Stop)) {
+                if (-not (Test-SapServiceEvidence ([string]$service.Name) ([string]$service.DisplayName) ([string]$service.PathName))) { continue }
                 Add-TableRow Services ([ordered]@{
                     name = $service.Name; state = $service.State; start_mode = $service.StartMode
                     account = $service.StartName; path = $service.PathName; description = $service.DisplayName
                 })
                 $script:SapEvidenceCount++
+                if (Test-SapServerServiceEvidence ([string]$service.Name) ([string]$service.PathName)) {
+                    $script:SapServerEvidenceCount++
+                }
+                if ([string]$service.Name -match '^(?i)SAP[A-Z0-9]{3}_(\d{2})$') {
+                    $script:SapInstanceNumbers[$Matches[1]] = $true
+                }
             }
             Add-Coverage 'Services' 'complete' 'Win32_Service inspected'
         } catch {
@@ -539,15 +623,22 @@ function Collect-Services {
             if (Get-Command systemctl -ErrorAction SilentlyContinue) {
                 foreach ($line in @(& systemctl list-units --type=service --all --no-legend --no-pager 2>$null)) {
                     if ($line -notmatch '^\s*(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(.*)$') { continue }
-                    if ("$($Matches[1]) $($Matches[5])" -notmatch '(?i)(sap|hana|hdb|sybase|cloud.?connector|\bscc\b)') { continue }
+                    $unit = $Matches[1]; $active = $Matches[3]; $sub = $Matches[4]; $description = $Matches[5]
                     $fragment = ''
-                    try { $fragment = (& systemctl show $Matches[1] -p FragmentPath --value 2>$null) } catch {}
+                    try { $fragment = (& systemctl show $unit -p FragmentPath --value 2>$null) } catch {}
+                    if (-not (Test-SapServiceEvidence $unit $description $fragment)) { continue }
                     Add-TableRow Services ([ordered]@{
-                        name = $Matches[1]; state = "$($Matches[3])/$($Matches[4])"; start_mode = 'systemd'
-                        account = ''; path = $fragment; description = $Matches[5]
+                        name = $unit; state = "$active/$sub"; start_mode = 'systemd'
+                        account = ''; path = $fragment; description = $description
                     })
-                    if ($fragment) { Add-PathEvidence $fragment 'Service definition' "Unit $($Matches[1])" }
+                    if ($fragment) { Add-PathEvidence $fragment 'Service definition' "Unit $unit" }
                     $found++; $script:SapEvidenceCount++
+                    if (Test-SapServerServiceEvidence $unit $fragment) {
+                        $script:SapServerEvidenceCount++
+                    }
+                    if ($unit -match '^(?i)SAP[A-Z0-9]{3}_(\d{2})(\.service)?$') {
+                        $script:SapInstanceNumbers[$Matches[1]] = $true
+                    }
                 }
             }
             Add-Coverage 'Services' 'complete' "$found SAP-named service definitions observed"
@@ -624,7 +715,24 @@ function Get-PortClassification {
         '^(4238|4239|4240|4241|59975|59976)$' { $result = @('SAP install/update administration', 'administration', 'critical-admin'); break }
     }
     if ($null -eq $result) { return $null }
-    [pscustomobject]@{ Name = $result[0]; Transport = $result[1]; Sensitivity = $result[2] }
+    $context = 'product'
+    $instance = ''
+    $product = ''
+    switch -Regex ($Port) {
+        '^(1128|1129|3298|3299)$' { $context = 'dedicated'; break }
+        '^(32|33|36|39|48|80|81)(\d{2})$' { $context = 'instance'; $instance = $Matches[2]; break }
+        '^(443|444)(\d{2})$' { $context = 'instance'; $instance = $Matches[2]; break }
+        '^[345](\d{2})\d{2}$' { $context = 'instance'; $instance = $Matches[1]; break }
+    }
+    switch -Regex ($Port) {
+        '^49\d{2}$' { $product = 'ase'; break }
+        '^(21212|21213|59975|59976)$' { $product = 'installer'; break }
+        '^(4238|4239|4240|4241)$' { $product = 'upgrade'; break }
+    }
+    [pscustomobject]@{
+        Name = $result[0]; Transport = $result[1]; Sensitivity = $result[2]
+        Context = $context; Instance = $instance; Product = $product
+    }
 }
 
 function Test-LoopbackAddress {
@@ -637,6 +745,38 @@ function Test-WildcardAddress {
     return ([string]::IsNullOrWhiteSpace($Address) -or $Address -match '^(\*|0\.0\.0\.0|::|0:0:0:0:0:0:0:0)$')
 }
 
+function Get-SapPortCorrelationBasis {
+    param([object]$Classification)
+    switch ($Classification.Context) {
+        'dedicated' { return 'Dedicated SAP service port with no contradictory process owner' }
+        'instance' {
+            if ($Classification.Instance -and $script:SapInstanceNumbers.ContainsKey([string]$Classification.Instance)) {
+                return "Port instance $($Classification.Instance) matches a discovered SAP instance"
+            }
+        }
+        'product' {
+            if ($Classification.Product -and $script:SapProductContext.ContainsKey([string]$Classification.Product)) {
+                return "SAP product port corroborated by matching $($Classification.Product) runtime evidence"
+            }
+        }
+    }
+    return $null
+}
+
+function Add-SocketCandidate {
+    param(
+        [object]$Classification, [string]$Protocol, [string]$State,
+        [string]$LocalEndpoint, [string]$RemoteEndpoint, [string]$ProcessId,
+        [string]$Process, [string]$Reason
+    )
+    Add-TableRow SocketCandidates ([ordered]@{
+        classification = $Classification.Name; transport = $Classification.Transport
+        protocol = $Protocol; state = $State; local = $LocalEndpoint; remote = $RemoteEndpoint
+        pid = $ProcessId; process = $Process; reason = $Reason
+    })
+    $script:SocketCandidateCount++
+}
+
 function Add-SocketEvidence {
     param(
         [string]$Protocol, [string]$State, [string]$LocalEndpoint,
@@ -646,26 +786,63 @@ function Add-SocketEvidence {
     $local = Split-EndPoint $LocalEndpoint
     $remote = Split-EndPoint $RemoteEndpoint
     $isListener = $State -match '^(?i)(LISTEN|LISTENING|UNCONN|UDP|Bound)$'
+    $sapOwned = $false
+    $confidence = ''
+    $basis = ''
+    if ($ProcessId -and $script:SapPids.ContainsKey([string]$ProcessId)) {
+        $sapOwned = $true
+        if ([string]::IsNullOrWhiteSpace($Process)) { $Process = $script:SapProcessByPid[[string]$ProcessId] }
+        $confidence = 'high'
+        $basis = "Socket owned by collected SAP process PID $ProcessId"
+    } elseif (Test-SapProcessText "$Process $Service") {
+        $sapOwned = $true
+        $confidence = 'high'
+        $basis = 'Socket owner matches an SAP-specific runtime identity'
+    }
     if ($isListener) {
         $classification = Get-PortClassification $local.Port
         if ($null -eq $classification) { $classification = Get-PortClassification $remote.Port }
     } else {
         # Connected sockets normally use an ephemeral local port. Prefer the
-        # peer port so values such as 53000 are not misread as Java HTTP.
+        # peer port, but allow a correlated local SAP service port to replace
+        # an unrelated ephemeral peer match on the server side.
         $classification = Get-PortClassification $remote.Port
-        if ($null -eq $classification) { $classification = Get-PortClassification $local.Port }
-    }
-    if ($null -eq $classification) {
-        if ($script:SapPids.ContainsKey([string]$ProcessId) -or (Test-SapProcessText "$Process $Service")) {
-            $classification = [pscustomobject]@{
-                Name = (Get-SapComponent "$Process $Service")
-                Transport = 'unclassified'; Sensitivity = 'unknown'
+        if ($null -ne $classification -and
+            -not (Get-SapPortCorrelationBasis $classification)) {
+            $localClassification = Get-PortClassification $local.Port
+            if ($null -ne $localClassification -and
+                (Get-SapPortCorrelationBasis $localClassification)) {
+                $classification = $localClassification
             }
-            if ($classification.Name -eq 'SAP Cloud Connector') { $classification.Sensitivity = 'admin' }
-        } else { return }
+        } elseif ($null -eq $classification -and
+            ($sapOwned -or [string]::IsNullOrWhiteSpace("$Process$Service"))) {
+            $classification = Get-PortClassification $local.Port
+        }
     }
-    if ([string]::IsNullOrWhiteSpace($Process) -and $script:SapProcessByPid.ContainsKey([string]$ProcessId)) {
-        $Process = $script:SapProcessByPid[[string]$ProcessId]
+    if ($null -ne $classification -and -not $sapOwned) {
+        if (-not [string]::IsNullOrWhiteSpace("$Process$Service")) {
+            # A visible non-SAP owner disproves local SAP ownership. Keeping
+            # these ubiquitous ephemeral matches would only create noise.
+            return
+        }
+        $correlationBasis = Get-SapPortCorrelationBasis $classification
+        if ($correlationBasis) {
+            $confidence = 'medium'
+            $basis = $correlationBasis
+        } else {
+            Add-SocketCandidate $classification $Protocol $State $LocalEndpoint $RemoteEndpoint $ProcessId $Process `
+                'No SAP owner, discovered instance-number match, or independent product context'
+            return
+        }
+    } elseif ($null -eq $classification) {
+        if (-not $sapOwned) { return }
+        $classification = [pscustomobject]@{
+            Name = (Get-SapComponent "$Process $Service")
+            Transport = 'unclassified'; Sensitivity = 'unknown'
+            Context = 'owned'; Instance = ''
+            Product = ''
+        }
+        if ($classification.Name -eq 'SAP Cloud Connector') { $classification.Sensitivity = 'admin' }
     }
     if ("$Process $Service" -match '(?i)(^|[\s/\\])(enserver|enrepserver)([\s/\\]|$)') {
         $classification = [pscustomobject]@{
@@ -684,7 +861,7 @@ function Add-SocketEvidence {
         classification = $classification.Name; transport = $classification.Transport
         protocol = $Protocol; state = $State; local = $LocalEndpoint
         remote = $RemoteEndpoint; exposure = $exposure; pid = $ProcessId
-        process = $Process; service = $Service
+        process = $Process; service = $Service; confidence = $confidence; basis = $basis
     })
     $script:SapEvidenceCount++
 
@@ -772,6 +949,14 @@ function Add-SocketEvidence {
     }
 }
 
+function Complete-SocketCorrelationCoverage {
+    if ($script:SocketCandidateCount -gt 0) {
+        Add-Coverage 'Socket correlation' 'filtered' "$($script:SocketCandidateCount) SAP-port candidate(s) retained separately because ownership or host-instance correlation was insufficient"
+    } else {
+        Add-Coverage 'Socket correlation' 'complete' 'Every recorded SAP socket was supported by process ownership, a discovered instance, or a dedicated SAP service port'
+    }
+}
+
 function Collect-Sockets {
     Write-AuditLog 'Collecting listening and connected SAP sockets'
     if ($script:IsWindowsHost -and (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
@@ -793,6 +978,7 @@ function Collect-Sockets {
         } catch {
             Add-Coverage 'Sockets' 'partial' $_.Exception.Message
         }
+        Complete-SocketCorrelationCoverage
         return
     }
     if (Get-Command ss -ErrorAction SilentlyContinue) {
@@ -811,6 +997,7 @@ function Collect-Sockets {
         Add-Coverage 'Sockets' 'unavailable' 'No Windows network cmdlets or ss command available'
         Write-AuditWarning 'No socket inventory provider found; the report will mark this coverage gap'
     }
+    Complete-SocketCorrelationCoverage
 }
 
 function Get-SapRoots {
@@ -822,7 +1009,9 @@ function Get-SapRoots {
         }
     } elseif ($script:IsWindowsHost) {
         foreach ($drive in @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
-            foreach ($relative in @('usr\sap', 'sapmnt', 'SAP', 'sybase', 'oracle')) {
+            $relatives = @('usr\sap', 'sapmnt')
+            if ($script:SapServerEvidenceCount -gt 0) { $relatives += @('sybase', 'oracle') }
+            foreach ($relative in $relatives) {
                 $candidate = Join-Path $drive.Root $relative
                 if (Test-Path -LiteralPath $candidate -PathType Container) { [void]$roots.Add($candidate) }
             }
@@ -850,18 +1039,52 @@ function Get-SapRoots {
 function Get-SensitiveArtifactRoots {
     $roots = New-Object System.Collections.Generic.List[string]
     foreach ($root in Get-SapRoots) { [void]$roots.Add($root) }
-    if ($script:CustomRoot -or -not $script:IsWindowsHost) {
-        foreach ($logical in @('/home', '/root')) {
-            $candidate = ConvertTo-PhysicalPath $logical
+    if ($script:IsWindowsHost -and -not $script:CustomRoot) {
+        if ($env:ProgramData) {
+            $candidate = Join-Path $env:ProgramData '.hdb'
             if (Test-Path -LiteralPath $candidate -PathType Container) { [void]$roots.Add($candidate) }
         }
-    } elseif ($script:IsWindowsHost) {
-        $windowsUserRoot = if ($env:SystemDrive) { Join-Path $env:SystemDrive 'Users' } else { $null }
-        foreach ($candidate in @($windowsUserRoot, $env:USERPROFILE, $env:PUBLIC)) {
-            if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Container)) { [void]$roots.Add($candidate) }
+    } else {
+        $homeRoot = ConvertTo-PhysicalPath '/home'
+        foreach ($profile in @(Get-ChildItem -LiteralPath $homeRoot -Directory -Force -ErrorAction SilentlyContinue)) {
+            $candidate = Join-Path $profile.FullName '.hdb'
+            if (Test-Path -LiteralPath $candidate -PathType Container) { [void]$roots.Add($candidate) }
         }
+        $candidate = Join-Path (ConvertTo-PhysicalPath '/root') '.hdb'
+        if (Test-Path -LiteralPath $candidate -PathType Container) { [void]$roots.Add($candidate) }
+        $candidate = ConvertTo-PhysicalPath '/ProgramData/.hdb'
+        if (Test-Path -LiteralPath $candidate -PathType Container) { [void]$roots.Add($candidate) }
     }
     return @($roots | Select-Object -Unique)
+}
+
+function Get-SapGuiHistoryRoots {
+    $roots = New-Object System.Collections.Generic.List[string]
+    if ($script:IsWindowsHost -and -not $script:CustomRoot) {
+        if ($env:APPDATA) { [void]$roots.Add((Join-Path $env:APPDATA 'SAP\SAP GUI\History')) }
+        if ($env:SystemDrive) {
+            $usersRoot = Join-Path $env:SystemDrive 'Users'
+            foreach ($profile in @(Get-ChildItem -LiteralPath $usersRoot -Directory -Force -ErrorAction SilentlyContinue)) {
+                [void]$roots.Add((Join-Path $profile.FullName 'AppData\Roaming\SAP\SAP GUI\History'))
+            }
+        }
+        foreach ($entry in @(
+            @('HKLM:\SOFTWARE\SAP\SAP Shared', 'SapHistoryDir'),
+            @('HKLM:\SOFTWARE\WOW6432Node\SAP\SAP Shared', 'SapHistoryDir'),
+            @('HKCU:\Software\SAP\SAPGUI Front\SAP Frontend Server\LocalData', 'DataPath')
+        )) {
+            try {
+                $value = [string](Get-ItemPropertyValue -LiteralPath $entry[0] -Name $entry[1] -ErrorAction Stop)
+                if ($value) { [void]$roots.Add([Environment]::ExpandEnvironmentVariables($value)) }
+            } catch {}
+        }
+    } elseif ($script:CustomRoot) {
+        $usersRoot = ConvertTo-PhysicalPath '/Users'
+        foreach ($profile in @(Get-ChildItem -LiteralPath $usersRoot -Directory -Force -ErrorAction SilentlyContinue)) {
+            [void]$roots.Add((Join-Path $profile.FullName 'AppData\Roaming\SAP\SAP GUI\History'))
+        }
+    }
+    return @($roots | Where-Object { $_ } | Select-Object -Unique)
 }
 
 function Discover-SapSystems {
@@ -883,17 +1106,26 @@ function Discover-SapSystems {
             $sid = $sidDir.Name.ToUpperInvariant()
             if ($sid -notmatch '^[A-Z][A-Z0-9]{2}$' -or $sid -match '^(SYS|SUM)$') { continue }
             $stack = 'Unknown'
-            if (Test-Path -LiteralPath (Join-Path $sidDir.FullName 'SYS\global\hdb')) { $stack = 'SAP HANA' }
+            $hasCharacteristic = $false
+            if (Test-Path -LiteralPath (Join-Path $sidDir.FullName 'SYS\global\hdb')) {
+                $stack = 'SAP HANA'
+                $hasCharacteristic = $true
+            }
             if (Test-Path -LiteralPath (Join-Path $sidDir.FullName 'SYS\profile')) {
                 if ($stack -eq 'SAP HANA') { $stack = 'SAP HANA / NetWeaver' } else { $stack = 'SAP NetWeaver' }
+                $hasCharacteristic = $true
             }
             $instances = New-Object System.Collections.Generic.List[string]
             foreach ($instance in @(Get-ChildItem -LiteralPath $sidDir.FullName -Directory -Force -ErrorAction SilentlyContinue)) {
                 if ($instance.Name -match '^(D|J|DVEBMGS|ASCS|SCS|ERS|HDB|PAS|AAS|SMDA|W)\d{2}$') {
+                    $hasCharacteristic = $true
                     [void]$instances.Add($instance.Name)
+                    Register-SapInstance $sid $instance.Name.Substring($instance.Name.Length - 2)
                     Add-PathEvidence $instance.FullName 'SAP instance' "SID $sid instance $($instance.Name)"
                 }
             }
+            if (-not $hasCharacteristic) { continue }
+            Register-SapInstance $sid
             $key = "$sid|$(ConvertTo-LogicalPath $sidDir.FullName)"
             if (-not $script:SeenSystem.ContainsKey($key)) {
                 $script:SeenSystem[$key] = $true
@@ -901,6 +1133,7 @@ function Discover-SapSystems {
                     sid = $sid; stack = $stack; instances = ($instances -join ', ')
                     root = ConvertTo-LogicalPath $sidDir.FullName; source = 'filesystem'
                 })
+                $script:SapServerEvidenceCount++
             }
             Add-PathEvidence $sidDir.FullName 'SAP system' "SID $sid"
             $script:SapEvidenceCount++
@@ -939,14 +1172,18 @@ function Scan-SecurityArtifacts {
         '*.jks', '*.keystore', 'cacerts', 'keystore.xml',
         'audit*', '*audit*.log', 'sal*.log', 'dev_w*', 'dev_disp', 'dev_ms', 'dev_rd',
         'dev_icm', 'dev_webdisp', 'dev_jstart', 'dev_server*', 'std_server*', 'prxyinfo',
-        'ms_acl_info', '*.acl', '*.sar', '*.car', '*.sca', '*.sda', 'SAPHistory*.db', '*webgui*'
+        'ms_acl_info', '*.acl', '*.sar', '*.car', '*.sca', '*.sda', '*webgui*'
     )
-    foreach ($root in Get-SensitiveArtifactRoots) {
+    foreach ($root in Get-SapRoots) {
         try {
             foreach ($item in @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue)) {
                 $matches = $false
                 if ($item.PSIsContainer) {
-                    $matches = ($item.Name -match '^(?i)(cofiles|data|buffer|History)$' -or $item.Name -match '(?i)webgui')
+                    $isTransportDirectory = (
+                        $item.Name -match '^(?i)(cofiles|data|buffer)$' -and
+                        $item.FullName -match '(?i)[/\\]trans[/\\](cofiles|data|buffer)$'
+                    )
+                    $matches = ($isTransportDirectory -or $item.Name -match '(?i)webgui')
                 } else {
                     foreach ($pattern in $patterns) {
                         if ($item.Name -like $pattern) { $matches = $true; break }
@@ -985,26 +1222,31 @@ function Scan-SecurityArtifacts {
                     '(?i)\.(sar|car|sca|sda)$' {
                         $category = 'SAP archive'; $note = 'Deployable or transportable SAP archive'; break
                     }
-                    '(?i)(^SAPHistory.*\.db$|^History$)' {
-                        $category = 'SAP GUI history'; $note = 'Client-side user-input history; content not read'
-                        $logical = ConvertTo-LogicalPath $item.FullName
-                        Add-Finding 'GUI-001' 'High' 'SAP GUI input-history data is present' $logical `
-                            'SAP GUI history can contain business data, identifiers, table names, and other clear-text field input. Older Java clients stored it unencrypted and older Windows clients used reversible XOR-based protection.' `
-                            'Confirm SAP GUI edition and patch level. Apply the relevant SAP Notes, disable history where risk requires it, exclude sensitive fields, and remove old history through an approved user-data procedure.' `
-                            'OWASP CBAS research: CVE-2025-0055/CVE-2025-0056'
-                        break
-                    }
                 }
                 Add-PathEvidence $item.FullName $category $note
             }
         } catch {}
         if ($count -gt $MaxFiles) { break }
     }
+    foreach ($historyRoot in Get-SapGuiHistoryRoots) {
+        if (-not (Test-Path -LiteralPath $historyRoot -PathType Container)) { continue }
+        foreach ($historyFile in @(Get-ChildItem -LiteralPath $historyRoot -File -Force -ErrorAction SilentlyContinue |
+                Where-Object Name -match '^(?i)SAPHistory.*\.db$')) {
+            $count++
+            if ($count -gt $MaxFiles) { break }
+            Add-PathEvidence $historyFile.FullName 'SAP GUI history' 'Documented SAP GUI input-history database; content not read'
+            Add-Finding 'GUI-001' 'High' 'SAP GUI input-history data is present' (ConvertTo-LogicalPath $historyFile.FullName) `
+                'SAP GUI history can contain business data, identifiers, table names, and other clear-text field input. Older Java clients stored it unencrypted and older Windows clients used reversible XOR-based protection.' `
+                'Confirm SAP GUI edition and patch level. Apply the relevant SAP Notes, disable history where risk requires it, exclude sensitive fields, and remove old history through an approved user-data procedure.' `
+                'OWASP CBAS research: CVE-2025-0055/CVE-2025-0056'
+        }
+        if ($count -gt $MaxFiles) { break }
+    }
     if ($count -gt $MaxFiles) {
         $script:TruncatedScans++
         Add-Coverage 'Security artifacts' 'partial' "Stopped at MaxFiles=$MaxFiles"
     } else {
-        Add-Coverage 'Security artifacts' 'complete' 'PSE/credential, Java SecStore, Download Manager, audit/trace, transport/archive, ACL, SAP GUI history, and WebGUI-named artifact patterns inspected without reading protected content'
+        Add-Coverage 'Security artifacts' 'complete' 'Broad artifact names inspected only under SAP roots; user profiles limited to documented or configured SAP GUI history paths'
     }
 }
 
@@ -1551,7 +1793,8 @@ function Scan-Ssfs {
     foreach ($configured in @(
         [Environment]::GetEnvironmentVariable('RSEC_SSFS_DATAPATH'),
         [Environment]::GetEnvironmentVariable('RSEC_SSFS_KEYPATH'),
-        [Environment]::GetEnvironmentVariable('RSEC_SSFS_LKYPATH')
+        [Environment]::GetEnvironmentVariable('RSEC_SSFS_LKYPATH'),
+        [Environment]::GetEnvironmentVariable('HDB_USE_STORE_PATH')
     ) + @($script:ConfiguredSsfsPaths)) {
         if ([string]::IsNullOrWhiteSpace($configured)) { continue }
         $candidate = if ($script:CustomRoot -and [IO.Path]::IsPathRooted($configured)) {
@@ -1622,7 +1865,7 @@ function Get-ToolComponent {
         '^(?i)hdbsql' { 'SAP HANA SQL client'; break }
         '^(?i)hdbuserstore' { 'SAP HANA secure user store'; break }
         '^(?i)hdblcm' { 'SAP HANA lifecycle manager'; break }
-        '^(?i)(dataserver|backupserver|bcksrvr)' { 'SAP ASE database service'; break }
+        '^(?i)(dataserver|backupserver|bcksrvr|jsagent)' { 'SAP ASE database service'; break }
         '^(?i)(disp\+work|dw\.sap)' { 'SAP kernel dispatcher'; break }
         '^(?i)gwrd' { 'SAP RFC Gateway'; break }
         '^(?i)ms\.sap' { 'SAP Message Server'; break }
@@ -1736,23 +1979,28 @@ function Scan-SapRegistry {
         if (-not (Test-Path -LiteralPath $root)) { continue }
         foreach ($sidKey in @(Get-ChildItem -LiteralPath $root -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^[A-Za-z][A-Za-z0-9]{2}$' })) {
             $sid = $sidKey.PSChildName.ToUpperInvariant()
-            $key = "$sid|registry"
-            if (-not $script:SeenSystem.ContainsKey($key)) {
+            $envKey = Join-Path $sidKey.PSPath 'Environment'
+            $properties = $null
+            try { $properties = Get-ItemProperty -LiteralPath $envKey -ErrorAction Stop } catch {}
+            if (-not (Test-SapRegistrySidEvidence $sid $properties)) { continue }
+            $alreadyKnown = $script:SapSids.ContainsKey($sid)
+            Register-SapInstance $sid
+            if (-not $alreadyKnown) {
+                $key = "$sid|registry"
                 $script:SeenSystem[$key] = $true
                 Add-TableRow Systems ([ordered]@{ sid = $sid; stack = 'SAP (registry)'; instances = ''; root = ''; source = $sidKey.PSPath })
             }
-            $envKey = Join-Path $sidKey.PSPath 'Environment'
-            try {
-                $properties = Get-ItemProperty -LiteralPath $envKey -ErrorAction Stop
+            if ($null -ne $properties) {
                 foreach ($name in @('SAPSYSTEMNAME', 'SAPLOCALHOST', 'DBMS_TYPE', 'SAPEXE', 'RSEC_SSFS_DATAPATH', 'RSEC_SSFS_KEYPATH', 'RSEC_SSFS_LKYPATH')) {
-                    $value = [string]$properties.$name
+                    $property = $properties.PSObject.Properties[$name]
+                    $value = if ($null -ne $property) { [string]$property.Value } else { '' }
                     if ($value) {
                         Add-ProfileParameter $envKey $name $value 'registry'
                         if ($name -match '^RSEC_SSFS_' -and [IO.Path]::IsPathRooted($value)) { [void]$script:ConfiguredSsfsPaths.Add($value) }
                     }
                 }
-            } catch {}
-            $found++; $script:SapEvidenceCount++
+            }
+            $found++; $script:SapEvidenceCount++; $script:SapServerEvidenceCount++
         }
     }
     Add-Coverage 'SAP registry' 'complete' "$found SID registry footprint(s)"
@@ -1944,8 +2192,7 @@ function Build-TopologyModel {
         if ($socket.exposure -eq 'connected' -and $socket.remote) { $endpoint = "$($socket.local) → $($socket.remote)" }
         $owner = if ($socket.process) { [string]$socket.process } else { [string]$socket.service }
         Add-ServiceMapEntry $category $socket.classification $socket.state $endpoint $socket.exposure $socket.transport $owner 'socket'
-        $socketConfidence = if ($script:SapPids.ContainsKey([string]$socket.pid) -or
-            (Test-SapProcessText "$($socket.process) $($socket.service)")) { 'high' } else { 'medium' }
+        $socketConfidence = if ($socket.confidence) { [string]$socket.confidence } else { 'medium' }
 
         $local = Split-EndPoint $socket.local
         if ($socket.state -match '^(?i)(LISTEN|LISTENING|UNCONN|UDP|Bound)$') {
@@ -2265,7 +2512,7 @@ function Convert-SocketRowsToHtml {
     } else {
         @($script:Tables.Sockets | Where-Object exposure -ne 'connected')
     }
-    return Convert-TableRowsToHtml -Rows $rows -Columns @('classification','transport','protocol','state','local','remote','exposure','pid','process','service')
+    return Convert-TableRowsToHtml -Rows $rows -Columns @('classification','transport','protocol','state','local','remote','exposure','pid','process','service','confidence','basis')
 }
 
 function Convert-PathGroupsToHtml {
@@ -2363,6 +2610,7 @@ function Write-JsonReport {
             services = $script:Tables.Services.Count
             processes = $script:Tables.Processes.Count
             sockets = $script:Tables.Sockets.Count
+            socket_candidates = $script:Tables.SocketCandidates.Count
             ssfs = $script:Tables.Ssfs.Count
             tools = $script:Tables.Tools.Count
         }
@@ -2371,6 +2619,7 @@ function Write-JsonReport {
         services = $script:Tables.Services.ToArray()
         processes = $script:Tables.Processes.ToArray()
         sockets = $script:Tables.Sockets.ToArray()
+        socket_candidates = $script:Tables.SocketCandidates.ToArray()
         paths = $script:Tables.Paths.ToArray()
         ssfs = $script:Tables.Ssfs.ToArray()
         tools = $script:Tables.Tools.ToArray()
@@ -2401,6 +2650,7 @@ function Write-HtmlReport {
     $processesHtml = Convert-TableRowsToHtml $script:Tables.Processes @('pid','user','group','name','executable','command','component')
     $listeningSocketsHtml = Convert-SocketRowsToHtml -Mode listening
     $connectedSocketsHtml = Convert-SocketRowsToHtml -Mode connected
+    $socketCandidatesHtml = Convert-TableRowsToHtml $script:Tables.SocketCandidates @('classification','transport','protocol','state','local','remote','pid','process','reason')
     $ssfsHtml = Convert-TableRowsToHtml $script:Tables.Ssfs @('family','sid','role','path','size_bytes','owner','group','mode','acl','detail')
     $toolsHtml = Convert-TableRowsToHtml $script:Tables.Tools @('name','component','path','source','version','owner','group','mode','acl','size_bytes','sha256','signature_status','signer')
     $profilesHtml = Convert-TableRowsToHtml $script:Tables.Profiles @('file','parameter','value','source')
@@ -2414,6 +2664,7 @@ function Write-HtmlReport {
     $jsonName = [IO.Path]::GetFileName($JsonPath)
     $listenerCount = @($script:Tables.Sockets | Where-Object exposure -ne 'connected').Count
     $connectedCount = @($script:Tables.Sockets | Where-Object exposure -eq 'connected').Count
+    $socketCandidateCount = $script:Tables.SocketCandidates.Count
     $html = @"
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -2443,7 +2694,7 @@ nav{position:sticky;top:0;z-index:4;margin:14px 0;display:flex;overflow-x:auto;b
 $findingSectionsHtml
 <details id="systems" class="report-section"><summary><h2>SAP systems</h2><span class="count-badge">$($script:Tables.Systems.Count) system(s)</span></summary><div class="section-body"><div class="section-head"><div class="muted">SID and instance footprints</div><input class="filter" placeholder="Filter systems…" data-target="systems-table"></div><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table id="systems-table"><thead><tr><th>SID</th><th>Stack</th><th>Instances</th><th>Root</th><th>Source</th></tr></thead><tbody>$systemsHtml</tbody></table></div></div></details>
 <details id="runtime" class="report-section"><summary><h2>Raw services and processes</h2><span class="count-badge">$($script:Tables.Services.Count) service(s) · $($script:Tables.Processes.Count) process(es)</span></summary><div class="section-body"><div class="section-head"><div class="muted">Underlying service-manager and process evidence; use the categorized catalog above for analysis</div><input class="filter" placeholder="Filter services/processes…" data-target="service-tables"></div><div id="service-tables"><details class="technical-group" open><summary><span>Services</span><span class="summary-meta">$($script:Tables.Services.Count) instance(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Name</th><th>State</th><th>Start mode</th><th>Account</th><th>Definition/path</th><th>Description</th></tr></thead><tbody>$servicesHtml</tbody></table></div></div></details><details class="technical-group"><summary><span>Processes</span><span class="summary-meta">$($script:Tables.Processes.Count) instance(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>PID</th><th>User</th><th>Group</th><th>Name</th><th>Executable</th><th>Command</th><th>Component</th></tr></thead><tbody>$processesHtml</tbody></table></div></div></details></div></div></details>
-<details id="sockets" class="report-section"><summary><h2>Listening endpoints and open connections</h2><span class="count-badge">$listenerCount listener(s) · $connectedCount connection(s)</span></summary><div class="section-body"><div class="section-head"><div class="muted">Separated listener and connection evidence; no remote probes were sent</div><input class="filter" placeholder="Filter network evidence…" data-target="socket-groups"></div><div id="socket-groups"><details class="technical-group" open><summary><span>Listening endpoints</span><span class="summary-meta">$listenerCount observation(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>Exposure</th><th>PID</th><th>Process</th><th>Service</th></tr></thead><tbody>$listeningSocketsHtml</tbody></table></div></div></details><details class="technical-group" open><summary><span>Established and open connections</span><span class="summary-meta">$connectedCount observation(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>Exposure</th><th>PID</th><th>Process</th><th>Service</th></tr></thead><tbody>$connectedSocketsHtml</tbody></table></div></div></details></div></div></details>
+<details id="sockets" class="report-section"><summary><h2>Listening endpoints and open connections</h2><span class="count-badge">$listenerCount listener(s) · $connectedCount connection(s) · $socketCandidateCount uncorroborated</span></summary><div class="section-body"><div class="section-head"><div class="muted">Only process-owned or host-correlated sockets are promoted as SAP evidence; ambiguous port matches remain separate and cannot create findings.</div><input class="filter" placeholder="Filter network evidence…" data-target="socket-groups"></div><div id="socket-groups"><details class="technical-group" open><summary><span>Listening endpoints</span><span class="summary-meta">$listenerCount observation(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>Exposure</th><th>PID</th><th>Process</th><th>Service</th><th>Confidence</th><th>Evidence basis</th></tr></thead><tbody>$listeningSocketsHtml</tbody></table></div></div></details><details class="technical-group" open><summary><span>Established and open connections</span><span class="summary-meta">$connectedCount observation(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>Exposure</th><th>PID</th><th>Process</th><th>Service</th><th>Confidence</th><th>Evidence basis</th></tr></thead><tbody>$connectedSocketsHtml</tbody></table></div></div></details><details class="technical-group"><summary><span>Uncorroborated SAP-port candidates</span><span class="summary-meta">$socketCandidateCount candidate(s), excluded from findings and topology</span></summary><div class="technical-group-body"><p class="muted">These are retained to avoid losing possible evidence when ownership is unavailable, but a port number by itself does not establish SAP.</p><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Candidate classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>PID</th><th>Process</th><th>Reason not promoted</th></tr></thead><tbody>$socketCandidatesHtml</tbody></table></div></div></details></div></div></details>
 <details id="ssfs" class="report-section"><summary><h2>SAP secure stores (SSFS)</h2><span class="count-badge">$($script:Tables.Ssfs.Count) artifact(s)</span></summary><div class="section-body"><div class="section-head"><div class="muted">Metadata-only: ABAP/RSEC, HANA instance, HANA System-PKI, hdbuserstore, LKY, and SCC</div><input class="filter" placeholder="Filter SSFS…" data-target="ssfs-table"></div><p class="notice">A .DAT/.KEY pair is operational evidence, not proof of secure lifecycle. A missing key may mean another configured path; SCC/default-key contexts need product-specific confirmation. No record names, values, HMAC keys, master keys, or decrypted bytes are included.</p><details class="technical-group" open><summary><span>Secure-store artifacts</span><span class="summary-meta">$($script:Tables.Ssfs.Count) metadata record(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table id="ssfs-table"><thead><tr><th>Family</th><th>SID/store</th><th>Role</th><th>Path</th><th>Bytes</th><th>Owner</th><th>Group</th><th>Mode</th><th>ACL</th><th>Safe detail</th></tr></thead><tbody>$ssfsHtml</tbody></table></div></div></details></div></details>
 <details id="tools" class="report-section"><summary><h2>SAP tools</h2><span class="count-badge">$($script:Tables.Tools.Count) tool(s)</span></summary><div class="section-body"><div class="section-head"><div class="muted">Administration/runtime binaries; not executed</div><input class="filter" placeholder="Filter tools…" data-target="tools-table"></div><details class="technical-group" open><summary><span>Tool instances and integrity metadata</span><span class="summary-meta">$($script:Tables.Tools.Count) binary record(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table id="tools-table"><thead><tr><th>Name</th><th>Capability</th><th>Path</th><th>Source</th><th>Version</th><th>Owner</th><th>Group</th><th>Mode</th><th>ACL</th><th>Bytes</th><th>SHA-256</th><th>Signature</th><th>Signer</th></tr></thead><tbody>$toolsHtml</tbody></table></div></div></details></div></details>
 <details id="profiles" class="report-section"><summary><h2>Profiles and parameters</h2><span class="count-badge">$($script:Tables.Profiles.Count) parameter(s)</span></summary><div class="section-body"><div class="section-head"><div class="muted">Security-relevant local configuration; secret-like values always redacted</div><input class="filter" placeholder="Filter parameters…" data-target="profiles-table"></div><details class="technical-group" open><summary><span>Observed parameter instances</span><span class="summary-meta">$($script:Tables.Profiles.Count) record(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table id="profiles-table"><thead><tr><th>File</th><th>Parameter</th><th>Value</th><th>Source</th></tr></thead><tbody>$profilesHtml</tbody></table></div></div></details></div></details>
@@ -2485,12 +2736,12 @@ try {
 
     Write-Banner
     Write-AuditLog "Starting SAPstract $($script:Version) host-local audit"
+    Discover-SapSystems
+    Scan-SapRegistry
     Collect-Processes
     Collect-Services
     Collect-Sockets
-    Discover-SapSystems
     Scan-KnownPaths
-    Scan-SapRegistry
     Scan-ProfilesAndAcls
     Scan-Ssfs
     Scan-Tools

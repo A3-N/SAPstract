@@ -155,6 +155,7 @@ SYSTEMS="$WORK_DIR/systems.tsv"
 SERVICES="$WORK_DIR/services.tsv"
 PROCESSES="$WORK_DIR/processes.tsv"
 SOCKETS="$WORK_DIR/sockets.tsv"
+SOCKET_CANDIDATES="$WORK_DIR/socket_candidates.tsv"
 PATHS="$WORK_DIR/paths.tsv"
 SSFS="$WORK_DIR/ssfs.tsv"
 TOOLS="$WORK_DIR/tools.tsv"
@@ -167,7 +168,7 @@ CAPABILITIES="$WORK_DIR/capabilities.tsv"
 DATABASES="$WORK_DIR/databases.tsv"
 TOPOLOGY_NODES="$WORK_DIR/topology_nodes.tsv"
 TOPOLOGY_EDGES="$WORK_DIR/topology_edges.tsv"
-for table in "$FINDINGS" "$SYSTEMS" "$SERVICES" "$PROCESSES" "$SOCKETS" "$PATHS" "$SSFS" "$TOOLS" "$PROFILES" "$COVERAGE" "$ASSESSMENT" "$SECTION_SCORES" "$SERVICE_MAP" "$CAPABILITIES" "$DATABASES" "$TOPOLOGY_NODES" "$TOPOLOGY_EDGES"; do
+for table in "$FINDINGS" "$SYSTEMS" "$SERVICES" "$PROCESSES" "$SOCKETS" "$SOCKET_CANDIDATES" "$PATHS" "$SSFS" "$TOOLS" "$PROFILES" "$COVERAGE" "$ASSESSMENT" "$SECTION_SCORES" "$SERVICE_MAP" "$CAPABILITIES" "$DATABASES" "$TOPOLOGY_NODES" "$TOPOLOGY_EDGES"; do
   : > "$table"
 done
 
@@ -181,6 +182,9 @@ declare -A SSFS_KEY_PATHS=()
 declare -A SSFS_FAMILY_BY_STEM=()
 declare -A SAP_PIDS=()
 declare -A SAP_PROCESS_BY_PID=()
+declare -A SAP_SIDS=()
+declare -A SAP_INSTANCE_NUMBERS=()
+declare -A SAP_PRODUCT_CONTEXT=()
 declare -A SEEN_SERVICE_MAP=()
 declare -A SEEN_DATABASE=()
 declare -A SEEN_TOPOLOGY_NODE=()
@@ -189,6 +193,8 @@ declare -A SEEN_CAPABILITY=()
 declare -a CONFIGURED_SSFS_PATHS=()
 RISK_SCORE=0
 SAP_EVIDENCE_COUNT=0
+SAP_SERVER_EVIDENCE_COUNT=0
+SOCKET_CANDIDATE_COUNT=0
 TRUNCATED_SCANS=0
 DATABASE_POSTURE_STATUS="undetermined"
 DATABASE_POSTURE_SUMMARY="No database placement evidence was observed."
@@ -199,7 +205,7 @@ append_row() {
   shift
   local first=1 field
   for field in "$@"; do
-    ((first)) || printf '\t' >> "$file"
+    ((first)) || printf '|' >> "$file"
     clean_field "$field" >> "$file"
     first=0
   done
@@ -358,17 +364,64 @@ record_path() {
   SAP_EVIDENCE_COUNT=$((SAP_EVIDENCE_COUNT + 1))
 }
 
-is_sap_process() {
+register_sap_instance() {
+  local sid=${1^^} instance=${2-}
+  [[ "$sid" =~ ^[A-Z][A-Z0-9]{2}$ ]] && SAP_SIDS[$sid]=1
+  [[ "$instance" =~ ^[0-9]{2}$ ]] && SAP_INSTANCE_NUMBERS[$instance]=1
+}
+
+is_sap_native_process() {
   local text=${1,,}
-  [[ "$text" =~ (^|[[:space:]/\\])(disp\+work|dw\.sap|gwrd|ms\.sap|enserver|enrepserver|icman|igswd_mt|igsmux|sapstartsrv(\.exe)?|saphostexec(\.exe)?|saphostctrl(\.exe)?|saposcol(\.exe)?|saprouter(\.exe)?|sapwebdisp(\.exe)?|jstart(\.exe)?|jlaunch(\.exe)?|hdbdaemon|hdbnameserver|hdbindexserver|hdbcompileserver|hdbpreprocessor|hdbxsengine|hdbscriptserver|hdbwebdispatcher|hdbesserver|hdbdocstore|hdbdpserver|hdbdiserver|dataserver|backupserver|bcksrvr(\.exe)?|oracle|ora_[a-z0-9_]+|tnslsnr|db2sysc|db2wdog|sqlservr(\.exe)?|dbmsrv|x_server|sapinst|sapup|r3trans(\.exe)?|tp(\.exe)?|scc_daemon|cloud.?connector)([[:space:]/\\]|$) ]] ||
-    [[ "$text" == *"/usr/sap/"* || "$text" == *"\\usr\\sap\\"* || "$text" == *"/sapmnt/"* || "$text" == *"\\sap\\hostctrl\\"* || "$text" == *"/oracle/"* || "$text" == *"/db2/"* || "$text" == *"/sapdb/"* || "$text" == *"/maxdb/"* ]]
+  [[ "$text" =~ (^|[[:space:]/\\])(disp\+work|dw\.sap|gwrd|ms\.sap|enserver|enrepserver|icman|igswd_mt|igsmux|sapstartsrv(\.exe)?|saphostexec(\.exe)?|saphostctrl(\.exe)?|saposcol(\.exe)?|saprouter(\.exe)?|sapwebdisp(\.exe)?|jstart(\.exe)?|jlaunch(\.exe)?|hdbdaemon|hdbnameserver|hdbindexserver|hdbcompileserver|hdbpreprocessor|hdbxsengine|hdbscriptserver|hdbwebdispatcher|hdbesserver|hdbdocstore|hdbdpserver|hdbdiserver|sapinst|sapup|r3trans(\.exe)?|scc_daemon|cloud.?connector)([[:space:]/\\]|$) ]] ||
+    [[ "$text" == *"/usr/sap/"* || "$text" == *"\\usr\\sap\\"* || "$text" == *"/sapmnt/"* ||
+       "$text" == *"\\sap\\hostctrl\\"* || "$text" == *"/sapdb/"* || "$text" == *"/maxdb/"* ||
+       "$text" == *"/hana/shared/"* || "$text" == *"/hana/data/"* || "$text" == *"/hana/log/"* ]]
+}
+
+is_sap_database_process() {
+  local text=${1,,} account=${2,,} sid sid_l
+  [[ "$text" =~ (^|[[:space:]/\\])(dataserver(\.exe)?|backupserver(\.exe)?|bcksrvr(\.exe)?|jsagent(\.exe)?|oracle|ora_[a-z0-9_]+|tnslsnr|db2sysc|db2wdog|sqlservr(\.exe)?|dbmsrv|x_server|tp(\.exe)?)([[:space:]/\\]|$) ]] || return 1
+  for sid in "${!SAP_SIDS[@]}"; do
+    sid_l=${sid,,}
+    if [[ "$account" =~ (^|[\\/@])(sapservice)?${sid_l}(adm)?$ ]] ||
+       [[ "$account" =~ (^|[\\/@])ora${sid_l}$ ]] ||
+       [[ "$account" =~ (^|[\\/@])syb${sid_l}$ ]] ||
+       [[ "$text" == *"/oracle/$sid_l/"* || "$text" == *"\\oracle\\$sid_l\\"* ||
+          "$text" == *"/sybase/$sid_l/"* || "$text" == *"\\sybase\\$sid_l\\"* ||
+          "$text" == *"ora_pmon_$sid_l"* || "$text" == *"ora_smon_$sid_l"* ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+is_sap_process() {
+  is_sap_native_process "${1-}" || is_sap_database_process "${1-}" "${2-}"
+}
+
+is_sap_service() {
+  local name=${1,,} description=${2,,} path=${3,,} text
+  text="$name $description $path"
+  [[ "$name" =~ ^sap[a-z0-9]{3}_[0-9]{2}(\.service)?$ ]] ||
+    [[ "$name" =~ ^(sap(host(control|exec)?|router|webdisp|oscol|startsrv)|hdb|hana)[a-z0-9_.@-]*(\.service)?$ ]] ||
+    [[ "$text" =~ (^|[[:space:]_.:/\\-])(sap|hana|hdb|cloud[[:space:]_.-]*connector)([[:space:]_.:/\\-]|$) ]] ||
+    [[ "$path" == *"/usr/sap/"* || "$path" == *"\\usr\\sap\\"* || "$path" == *"\\program files\\sap\\"* ]]
+}
+
+is_sap_server_service() {
+  local name=${1,,} path=${2,,}
+  [[ "$name" =~ ^sap[a-z0-9]{3}_[0-9]{2}(\.service)?$ ]] ||
+    [[ "$name" =~ ^(sap(host(control|exec)?|router|webdisp|oscol|startsrv)|hdb|hana)[a-z0-9_.@-]*(\.service)?$ ]] ||
+    [[ "$path" == *"/usr/sap/"* || "$path" == *"\\usr\\sap\\"* || "$path" == *"/sapmnt/"* ||
+       "$path" == *"/hana/shared/"* || "$path" == *"/hana/data/"* || "$path" == *"/hana/log/"* ||
+       "$path" == *"/sybase/"* || "$path" == *"/oracle/"* || "$path" == *"/db2/"* ]]
 }
 
 component_for_process() {
   local text=${1,,}
   case "$text" in
     *hdb*) printf "SAP HANA" ;;
-    *dataserver*|*backupserver*|*bcksrvr*) printf "SAP ASE" ;;
+    *dataserver*|*backupserver*|*bcksrvr*|*jsagent*) printf "SAP ASE" ;;
     *ora_pmon*|*tnslsnr*|*/oracle/*|*\\oracle\\*|*" oracle "*) printf "Oracle Database" ;;
     *db2sysc*|*db2wdog*|*/db2/*|*\\db2\\*) printf "IBM Db2" ;;
     *sqlservr*) printf "Microsoft SQL Server" ;;
@@ -411,13 +464,19 @@ collect_processes() {
   local pid user group name args executable component
   while read -r pid user group name args; do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
-    is_sap_process "$name $args" || continue
     executable=""
     [[ -e "/proc/$pid/exe" ]] && executable=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+    is_sap_process "$name $executable $args" "$user" || continue
     component=$(component_for_process "$name $executable $args")
+    case "$component" in
+      "SAP ASE") SAP_PRODUCT_CONTEXT[ase]=1 ;;
+      "SAP Software Provisioning Manager") SAP_PRODUCT_CONTEXT[installer]=1 ;;
+      "SAP Software Update Manager") SAP_PRODUCT_CONTEXT[upgrade]=1 ;;
+    esac
     append_row "$PROCESSES" "$pid" "$user" "$group" "$name" "$executable" "$args" "$component"
     SAP_PIDS[$pid]=1; SAP_PROCESS_BY_PID[$pid]=$name
     SAP_EVIDENCE_COUNT=$((SAP_EVIDENCE_COUNT + 1))
+    SAP_SERVER_EVIDENCE_COUNT=$((SAP_SERVER_EVIDENCE_COUNT + 1))
     audit_process_command "$name" "$args"
     if [[ -n "$executable" ]]; then
       record_path "$executable" "Executable" "Running $component binary"
@@ -433,11 +492,18 @@ collect_services() {
     local unit _load active sub description
     while read -r unit _load active sub description; do
       [[ -n "$unit" ]] || continue
-      if [[ "${unit,,} ${description,,}" =~ (sap|hana|hdb|sybase|cloud.?connector|scc) ]]; then
-        local fragment=""
-        fragment=$(systemctl show "$unit" -p FragmentPath --value 2>/dev/null || true)
+      local fragment=""
+      fragment=$(systemctl show "$unit" -p FragmentPath --value 2>/dev/null || true)
+      if is_sap_service "$unit" "$description" "$fragment"; then
         append_row "$SERVICES" "$unit" "$active/$sub" "systemd" "" "$fragment" "$description"
         found_any=1
+        SAP_EVIDENCE_COUNT=$((SAP_EVIDENCE_COUNT + 1))
+        if is_sap_server_service "$unit" "$fragment"; then
+          SAP_SERVER_EVIDENCE_COUNT=$((SAP_SERVER_EVIDENCE_COUNT + 1))
+        fi
+        if [[ "${unit%.service}" =~ ^[Ss][Aa][Pp][A-Za-z0-9]{3}_([0-9]{2})$ ]]; then
+          SAP_INSTANCE_NUMBERS[${BASH_REMATCH[1]}]=1
+        fi
         [[ -n "$fragment" ]] && record_path "$fragment" "Service definition" "Unit $unit"
       fi
     done < <(systemctl list-units --type=service --all --no-legend --no-pager 2>/dev/null)
@@ -449,10 +515,13 @@ collect_services() {
     local init
     for init in "$init_dir"/*; do
       [[ -f "$init" ]] || continue
-      [[ "${init##*/}" =~ [Ss][Aa][Pp]|[Hh][Dd][Bb]|[Ss][Cc][Cc] ]] || continue
+      is_sap_service "${init##*/}" "Legacy service definition" "$init" || continue
       append_row "$SERVICES" "${init##*/}" "installed/unknown" "init" "" "$(logical_path "$init")" "Legacy service definition"
       record_path "$init" "Service definition" "Legacy init script"
       found_any=1
+      if is_sap_server_service "${init##*/}" "$init"; then
+        SAP_SERVER_EVIDENCE_COUNT=$((SAP_SERVER_EVIDENCE_COUNT + 1))
+      fi
     done
   fi
   if ((found_any)); then
@@ -476,7 +545,7 @@ endpoint_parts() {
 
 classify_port() {
   local port=${1-}
-  PORT_CLASS=""; PORT_TRANSPORT=""; PORT_SENSITIVITY="normal"
+  PORT_CLASS=""; PORT_TRANSPORT=""; PORT_SENSITIVITY="normal"; PORT_CONTEXT="product"; PORT_INSTANCE=""; PORT_PRODUCT=""
   [[ "$port" =~ ^[0-9]+$ ]] || return 1
   case "$port" in
     3298) PORT_CLASS="SAP NI ping"; PORT_TRANSPORT="NI"; PORT_SENSITIVITY="business" ;;
@@ -531,6 +600,25 @@ classify_port() {
     59975|59976) PORT_CLASS="SAPinst platform service"; PORT_TRANSPORT="administration"; PORT_SENSITIVITY="critical-admin" ;;
     *) return 1 ;;
   esac
+  case "$port" in
+    1128|1129|3298|3299)
+      PORT_CONTEXT="dedicated"
+      ;;
+    32[0-9][0-9]|33[0-9][0-9]|36[0-9][0-9]|39[0-9][0-9]|48[0-9][0-9]|80[0-9][0-9]|81[0-9][0-9])
+      PORT_CONTEXT="instance"; PORT_INSTANCE=${port:2:2}
+      ;;
+    443[0-9][0-9]|444[0-9][0-9])
+      PORT_CONTEXT="instance"; PORT_INSTANCE=${port:3:2}
+      ;;
+    3[0-9][0-9][0-9][0-9]|4[0-9][0-9][0-9][0-9]|5[0-9][0-9][0-9][0-9])
+      PORT_CONTEXT="instance"; PORT_INSTANCE=${port:1:2}
+      ;;
+  esac
+  case "$port" in
+    49[0-9][0-9]) PORT_PRODUCT="ase" ;;
+    21212|21213|59975|59976) PORT_PRODUCT="installer" ;;
+    4238|4239|4240|4241) PORT_PRODUCT="upgrade" ;;
+  esac
   return 0
 }
 
@@ -551,11 +639,50 @@ is_collected_sap_pid() {
   [[ -n "${SAP_PIDS[$pid]+x}" ]]
 }
 
+port_has_sap_context() {
+  case "$PORT_CONTEXT" in
+    dedicated)
+      SOCKET_BASIS="Dedicated SAP service port with no contradictory process owner"
+      return 0
+      ;;
+    instance)
+      if [[ -n "$PORT_INSTANCE" ]] && [[ -n "${SAP_INSTANCE_NUMBERS[$PORT_INSTANCE]+x}" ]]; then
+        SOCKET_BASIS="Port instance $PORT_INSTANCE matches a discovered SAP instance"
+        return 0
+      fi
+      ;;
+    product)
+      if [[ -n "$PORT_PRODUCT" ]] && [[ -n "${SAP_PRODUCT_CONTEXT[$PORT_PRODUCT]+x}" ]]; then
+        SOCKET_BASIS="SAP product port corroborated by matching $PORT_PRODUCT runtime evidence"
+        return 0
+      fi
+      ;;
+  esac
+  return 1
+}
+
+record_socket_candidate() {
+  local classification=$1 transport=$2 protocol=$3 state=$4 local_ep=$5 remote_ep=$6
+  local pid=${7-} process=${8-} reason=${9-}
+  append_row "$SOCKET_CANDIDATES" "$classification" "$transport" "$protocol" "$state" "$local_ep" "$remote_ep" "$pid" "$process" "$reason"
+  SOCKET_CANDIDATE_COUNT=$((SOCKET_CANDIDATE_COUNT + 1))
+}
+
 record_socket() {
   local protocol=$1 state=$2 local_ep=$3 remote_ep=$4 pid=${5-} process=${6-} service=${7-}
   endpoint_parts "$local_ep"; local local_addr=$EP_ADDR local_port=$EP_PORT
   endpoint_parts "$remote_ep"; local remote_port=$EP_PORT
-  local classification="" transport="" sensitivity=""
+  local classification="" transport="" sensitivity="" confidence="" basis="" sap_owned=0
+
+  if is_collected_sap_pid "$pid"; then
+    sap_owned=1
+    [[ -n "$process" ]] || process=${SAP_PROCESS_BY_PID[$pid]-}
+    confidence="high"; basis="Socket owned by collected SAP process PID $pid"
+  elif is_sap_process "$process $service"; then
+    sap_owned=1
+    confidence="high"; basis="Socket owner matches an SAP-specific runtime identity"
+  fi
+
   if [[ "${state^^}" =~ ^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$ ]]; then
     if classify_port "$local_port"; then
       classification=$PORT_CLASS; transport=$PORT_TRANSPORT; sensitivity=$PORT_SENSITIVITY
@@ -564,22 +691,43 @@ record_socket() {
     fi
   else
     # Connected sockets normally use an ephemeral local port. Prefer the peer
-    # port so an ephemeral value such as 53000 is not misread as Java HTTP.
+    # port, but fall back to a correlated local service port for the server
+    # side of loopback connections.
     if classify_port "$remote_port"; then
       classification=$PORT_CLASS; transport=$PORT_TRANSPORT; sensitivity=$PORT_SENSITIVITY
-    elif classify_port "$local_port"; then
+      if ! port_has_sap_context; then
+        local remote_class=$classification remote_transport=$transport remote_sensitivity=$sensitivity
+        local remote_context=$PORT_CONTEXT remote_instance=$PORT_INSTANCE remote_product=$PORT_PRODUCT
+        if classify_port "$local_port" && port_has_sap_context; then
+          classification=$PORT_CLASS; transport=$PORT_TRANSPORT; sensitivity=$PORT_SENSITIVITY
+        else
+          classification=$remote_class; transport=$remote_transport; sensitivity=$remote_sensitivity
+          PORT_CONTEXT=$remote_context; PORT_INSTANCE=$remote_instance; PORT_PRODUCT=$remote_product
+        fi
+      fi
+    elif { ((sap_owned)) || [[ -z "$process$service" ]]; } && classify_port "$local_port"; then
       classification=$PORT_CLASS; transport=$PORT_TRANSPORT; sensitivity=$PORT_SENSITIVITY
     fi
   fi
-  if [[ -z "$classification" ]]; then
-    if is_collected_sap_pid "$pid" || is_sap_process "$process $service"; then
-      classification=$(component_for_process "$process $service")
-      transport="unclassified"
-      sensitivity="unknown"
-      [[ "$classification" == "SAP Cloud Connector" ]] && sensitivity="admin"
+
+  if [[ -n "$classification" && "$sap_owned" -eq 0 ]]; then
+    if [[ -n "$process" || -n "$service" ]]; then
+      # A visible non-SAP owner disproves local SAP ownership. Keeping these
+      # ubiquitous ephemeral matches would only create noise.
+      return 0
+    elif port_has_sap_context; then
+      confidence="medium"; basis=$SOCKET_BASIS
     else
+      record_socket_candidate "$classification" "$transport" "$protocol" "$state" "$local_ep" "$remote_ep" "$pid" "$process" \
+        "No SAP owner, discovered instance-number match, or independent product context"
       return 0
     fi
+  elif [[ -z "$classification" ]]; then
+    ((sap_owned)) || return 0
+    classification=$(component_for_process "$process $service")
+    transport="unclassified"
+    sensitivity="unknown"
+    [[ "$classification" == "SAP Cloud Connector" ]] && sensitivity="admin"
   fi
 
   local exposure="connected"
@@ -592,15 +740,12 @@ record_socket() {
       ;;
   esac
 
-  if [[ -z "$process" ]] && is_collected_sap_pid "$pid"; then
-    process=${SAP_PROCESS_BY_PID[$pid]-}
-  fi
   if [[ "${process,,} ${service,,}" =~ (^|[[:space:]/\\])(enserver|enrepserver)([[:space:]/\\]|$) ]]; then
     classification="SAP Enqueue Server"
     transport="SAP Enqueue/NI"
     sensitivity="critical-internal"
   fi
-  append_row "$SOCKETS" "$classification" "$transport" "$protocol" "$state" "$local_ep" "$remote_ep" "$exposure" "$pid" "$process" "$service"
+  append_row "$SOCKETS" "$classification" "$transport" "$protocol" "$state" "$local_ep" "$remote_ep" "$exposure" "$pid" "$process" "$service" "$confidence" "$basis"
   SAP_EVIDENCE_COUNT=$((SAP_EVIDENCE_COUNT + 1))
 
   if [[ "$exposure" == "all-interfaces" || "$exposure" == "network-interface" ]]; then
@@ -726,11 +871,16 @@ collect_sockets() {
     add_coverage "Sockets" "unavailable" "No ss, netstat, or lsof command found"
     warn "No socket inventory command found; report will note the coverage gap"
   fi
+  if ((SOCKET_CANDIDATE_COUNT > 0)); then
+    add_coverage "Socket correlation" "filtered" "$SOCKET_CANDIDATE_COUNT SAP-port candidate(s) retained separately because ownership or host-instance correlation was insufficient"
+  else
+    add_coverage "Socket correlation" "complete" "Every recorded SAP socket was supported by process ownership, a discovered instance, or a dedicated SAP service port"
+  fi
 }
 
 discover_systems() {
   log "Discovering SAP systems and instances"
-  local logical_root physical sid_dir sid sid_u stack instances instance name key
+  local logical_root physical sid_dir sid sid_u stack instances instance name key has_characteristic
   for logical_root in /usr/sap /sapmnt; do
     physical=$(physical_path "$logical_root")
     [[ -d "$physical" ]] || continue
@@ -741,23 +891,32 @@ discover_systems() {
       [[ "$sid_u" =~ ^[A-Z][A-Z0-9]{2}$ ]] || continue
       [[ "$sid_u" =~ ^(SYS|SUM)$ ]] && continue
       stack="Unknown"
-      [[ -d "$sid_dir/SYS/global/hdb" ]] && stack="SAP HANA"
-      [[ -d "$sid_dir/SYS/profile" ]] && stack=$([[ "$stack" == "SAP HANA" ]] && printf "SAP HANA / NetWeaver" || printf "SAP NetWeaver")
+      has_characteristic=0
+      if [[ -d "$sid_dir/SYS/global/hdb" ]]; then stack="SAP HANA"; has_characteristic=1; fi
+      if [[ -d "$sid_dir/SYS/profile" ]]; then
+        stack=$([[ "$stack" == "SAP HANA" ]] && printf "SAP HANA / NetWeaver" || printf "SAP NetWeaver")
+        has_characteristic=1
+      fi
       instances=""
       for instance in "$sid_dir"/*; do
         [[ -d "$instance" ]] || continue
         name=${instance##*/}
         if [[ "$name" =~ ^(D|J|DVEBMGS|ASCS|SCS|ERS|HDB|PAS|AAS|SMDA|W)[0-9]{2}$ ]]; then
+          has_characteristic=1
           [[ -z "$instances" ]] || instances+=", "
           instances+="$name"
+          register_sap_instance "$sid_u" "${name: -2}"
           record_path "$instance" "SAP instance" "SID $sid_u instance $name"
         fi
       done
+      ((has_characteristic)) || continue
+      register_sap_instance "$sid_u"
       key="$sid_u|$(logical_path "$sid_dir")"
       if [[ -z "${SEEN_SYSTEM[$key]+x}" ]]; then
         SEEN_SYSTEM[$key]=1
         append_row "$SYSTEMS" "$sid_u" "$stack" "$instances" "$(logical_path "$sid_dir")" "$logical_root directory"
         SAP_EVIDENCE_COUNT=$((SAP_EVIDENCE_COUNT + 1))
+        SAP_SERVER_EVIDENCE_COUNT=$((SAP_SERVER_EVIDENCE_COUNT + 1))
       fi
       record_path "$sid_dir" "SAP system" "SID $sid_u"
     done
@@ -771,11 +930,14 @@ discover_systems() {
       [[ "$line" == *pf=* ]] || continue
       if [[ "$line" =~ /usr/sap/([A-Za-z][A-Za-z0-9]{2})/ ]]; then
         sid_u=${BASH_REMATCH[1]^^}
-        key="$sid_u|sapservices"
-        if [[ -z "${SEEN_SYSTEM[$key]+x}" ]]; then
+        if [[ -z "${SAP_SIDS[$sid_u]+x}" ]]; then
+          key="$sid_u|sapservices"
           SEEN_SYSTEM[$key]=1
           append_row "$SYSTEMS" "$sid_u" "SAP (from sapservices)" "" "/usr/sap/$sid_u" "/usr/sap/sapservices"
+          SAP_SERVER_EVIDENCE_COUNT=$((SAP_SERVER_EVIDENCE_COUNT + 1))
         fi
+        register_sap_instance "$sid_u"
+        if [[ "$line" =~ _([0-9]{2})_ ]]; then SAP_INSTANCE_NUMBERS[${BASH_REMATCH[1]}]=1; fi
       fi
     done < "$sapservices"
   fi
@@ -786,6 +948,9 @@ scan_known_paths() {
   log "Inventorying standard SAP paths"
   local logical physical category
   while IFS='|' read -r logical category; do
+    if [[ "$logical" =~ ^/(oracle|db2|sybase|opt/sybase)$ ]] && ((SAP_SERVER_EVIDENCE_COUNT == 0)); then
+      continue
+    fi
     physical=$(physical_path "$logical")
     [[ -e "$physical" ]] && record_path "$physical" "$category" "Known SAP path"
   done <<'EOF'
@@ -815,7 +980,7 @@ EOF
 scan_security_artifacts() {
   log "Inventorying SAP security, audit, transport, and client artifacts"
   local roots=() logical physical root file base lower category note count=0
-  for logical in /usr/sap /sapmnt /hana/shared /opt/sap /var/lib/sap /home /root; do
+  for logical in /usr/sap /sapmnt /hana/shared /opt/sap /var/lib/sap; do
     physical=$(physical_path "$logical")
     [[ -d "$physical" ]] && roots+=("$physical")
   done
@@ -864,14 +1029,6 @@ scan_security_artifacts() {
           category="SAP archive"
           note="Deployable or transportable SAP archive"
           ;;
-        saphistory*.db|history)
-          category="SAP GUI history"
-          note="Client-side user-input history; content not read"
-          add_finding "GUI-001" "High" "SAP GUI input-history data is present" "$(logical_path "$file")" \
-            "SAP GUI history can contain business data, identifiers, table names, and other clear-text field input. Older Java clients stored it unencrypted and older Windows clients used reversible XOR-based protection." \
-            "Confirm the SAP GUI edition and patch level. Apply the relevant SAP security notes, disable history where the business risk requires it, exclude sensitive fields, and remove old history through an approved user-data procedure." \
-            "OWASP CBAS research: CVE-2025-0055/CVE-2025-0056"
-          ;;
       esac
       record_path "$file" "$category" "$note"
     done < <(find "$root" -xdev -maxdepth 12 \
@@ -882,14 +1039,34 @@ scan_security_artifacts() {
          -o -iname 'dev_ms' -o -iname 'dev_rd' -o -iname 'dev_icm' -o -iname 'dev_webdisp' \
          -o -iname 'dev_jstart' -o -iname 'dev_server*' -o -iname 'std_server*' -o -iname 'prxyinfo' \
          -o -iname 'ms_acl_info' -o -iname '*.acl' -o -iname '*.sar' -o -iname '*.car' \
-         -o -iname '*.sca' -o -iname '*.sda' -o -iname 'SAPHistory*.db' -o -iname '*webgui*' \) \
-         -o -type d \( -iname 'cofiles' -o -iname 'data' -o -iname 'buffer' -o -iname 'History' -o -iname '*webgui*' \) \) \
-      -print0 2>/dev/null)
+         -o -iname '*.sca' -o -iname '*.sda' -o -iname '*webgui*' \) \
+         -o -type d \( -ipath '*/trans/cofiles' -o -ipath '*/trans/data' -o -ipath '*/trans/buffer' -o -iname '*webgui*' \) \) \
+       -print0 2>/dev/null)
+  done
+
+  # User homes are intentionally limited to the documented SAP GUI history
+  # layout. Generic names such as "history", "audit", and "data" are not SAP
+  # evidence outside an SAP-owned root.
+  for logical in /home /root; do
+    physical=$(physical_path "$logical")
+    [[ -d "$physical" ]] || continue
+    while IFS= read -r -d '' file; do
+      count=$((count + 1))
+      if ((count > MAX_FILES)); then
+        TRUNCATED_SCANS=$((TRUNCATED_SCANS + 1))
+        break 2
+      fi
+      record_path "$file" "SAP GUI history" "Documented SAP GUI input-history directory; content not read"
+      add_finding "GUI-001" "High" "SAP GUI input-history data is present" "$(logical_path "$file")" \
+        "SAP GUI history can contain business data, identifiers, table names, and other clear-text field input. Older Java clients stored it unencrypted and older Windows clients used reversible XOR-based protection." \
+        "Confirm the SAP GUI edition and patch level. Apply the relevant SAP security notes, disable history where the business risk requires it, exclude sensitive fields, and remove old history through an approved user-data procedure." \
+        "OWASP CBAS research: CVE-2025-0055/CVE-2025-0056"
+    done < <(find "$physical" -xdev -maxdepth 10 -type d -ipath '*/SAP/SAP GUI/History' -print0 2>/dev/null)
   done
   if ((count > MAX_FILES)); then
     add_coverage "Security artifacts" "partial" "Stopped at --max-files=$MAX_FILES"
   else
-    add_coverage "Security artifacts" "complete" "PSE/credential, Java SecStore, Download Manager, audit/trace, transport/archive, ACL, SAP GUI history, and WebGUI-named artifact patterns inspected without reading protected content"
+    add_coverage "Security artifacts" "complete" "Broad artifact names inspected only under SAP roots; user profiles limited to the documented SAP GUI history layout"
   fi
 }
 
@@ -1004,12 +1181,22 @@ record_ssfs_file() {
 
 scan_ssfs() {
   log "Discovering all recognized SAP SSFS families"
-  local roots=() logical physical configured candidate count=0
-  for logical in /usr/sap /sapmnt /opt/sap /var/lib/sap /home /root; do
+  local roots=() logical physical configured candidate count=0 user_dir
+  for logical in /usr/sap /sapmnt /opt/sap /var/lib/sap; do
     physical=$(physical_path "$logical")
     [[ -d "$physical" ]] && roots+=("$physical")
   done
-  for configured in "${RSEC_SSFS_DATAPATH-}" "${RSEC_SSFS_KEYPATH-}" "${RSEC_SSFS_LKYPATH-}" "${CONFIGURED_SSFS_PATHS[@]-}"; do
+  physical=$(physical_path "/home")
+  if [[ -d "$physical" ]]; then
+    for user_dir in "$physical"/*; do
+      [[ -d "$user_dir/.hdb" ]] && roots+=("$user_dir/.hdb")
+    done
+  fi
+  physical=$(physical_path "/root/.hdb")
+  [[ -d "$physical" ]] && roots+=("$physical")
+  physical=$(physical_path "/ProgramData/.hdb")
+  [[ -d "$physical" ]] && roots+=("$physical")
+  for configured in "${RSEC_SSFS_DATAPATH-}" "${RSEC_SSFS_KEYPATH-}" "${RSEC_SSFS_LKYPATH-}" "${HDB_USE_STORE_PATH-}" "${CONFIGURED_SSFS_PATHS[@]-}"; do
     [[ -n "$configured" && "$configured" == /* ]] || continue
     if [[ "$ROOT_PATH" == "/" ]]; then candidate=$configured; else candidate="$ROOT_PATH$configured"; fi
     [[ -d "$candidate" ]] && roots+=("$candidate")
@@ -1488,7 +1675,7 @@ tool_component() {
     hdbsql*) printf "SAP HANA SQL client" ;;
     hdbuserstore*) printf "SAP HANA secure user store" ;;
     hdblcm*) printf "SAP HANA lifecycle manager" ;;
-    dataserver*|backupserver*|bcksrvr*) printf "SAP ASE database service" ;;
+    dataserver*|backupserver*|bcksrvr*|jsagent*) printf "SAP ASE database service" ;;
     disp+work*|dw.sap*) printf "SAP kernel dispatcher" ;;
     gwrd*) printf "SAP RFC Gateway" ;;
     ms.sap*) printf "SAP Message Server" ;;
@@ -1696,17 +1883,17 @@ build_topology_model() {
   SEEN_SERVICE_MAP=(); SEEN_DATABASE=(); SEEN_TOPOLOGY_NODE=(); SEEN_TOPOLOGY_EDGE=(); SEEN_CAPABILITY=()
   add_topology_node "host" "$HOST_NAME" "sap-host" "local" "observed" "Audited host; relationships are derived only from local evidence."
 
-  local classification transport protocol state local_ep remote_ep exposure pid process service
+  local classification transport protocol state local_ep remote_ep exposure pid process service confidence basis
   local local_addr local_port remote_addr remote_port category component status endpoint engine placement
   local remote_id evidence socket_confidence
   declare -A local_addresses=()
-  while IFS=$'\t' read -r classification transport protocol state local_ep remote_ep exposure pid process service || [[ -n "$classification" ]]; do
+  while IFS='|' read -r classification transport protocol state local_ep remote_ep exposure pid process service confidence basis || [[ -n "$classification" ]]; do
     [[ -n "$classification" ]] || continue
     endpoint_parts "$local_ep"; local_addr=$EP_ADDR
     if [[ -n "$local_addr" ]] && ! is_wildcard "$local_addr"; then local_addresses["${local_addr,,}"]=1; fi
   done < "$SOCKETS"
 
-  while IFS=$'\t' read -r classification transport protocol state local_ep remote_ep exposure pid process service || [[ -n "$classification" ]]; do
+  while IFS='|' read -r classification transport protocol state local_ep remote_ep exposure pid process service confidence basis || [[ -n "$classification" ]]; do
     [[ -n "$classification" ]] || continue
     category=$(service_category_for "$classification $transport $process $service")
     component=$classification
@@ -1714,8 +1901,7 @@ build_topology_model() {
     endpoint=$local_ep
     [[ "$exposure" == "connected" && -n "$remote_ep" ]] && endpoint="$local_ep → $remote_ep"
     add_service_map_entry "$category" "$component" "$status" "$endpoint" "$exposure" "$transport" "${process:-$service}" "socket"
-    socket_confidence="medium"
-    if is_collected_sap_pid "$pid" || is_sap_process "$process $service"; then socket_confidence="high"; fi
+    socket_confidence=${confidence:-medium}
 
     endpoint_parts "$local_ep"; local_addr=$EP_ADDR; local_port=$EP_PORT
     if [[ "${state^^}" =~ ^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$ ]]; then
@@ -1751,7 +1937,7 @@ build_topology_model() {
   done < "$SOCKETS"
 
   local name start_mode account path description user group executable command_line source
-  while IFS=$'\t' read -r name state start_mode account path description || [[ -n "$name" ]]; do
+  while IFS='|' read -r name state start_mode account path description || [[ -n "$name" ]]; do
     [[ -n "$name" ]] || continue
     component=$(component_for_process "$name $description $path")
     category=$(service_category_for "$component $name $description")
@@ -1760,7 +1946,7 @@ build_topology_model() {
     [[ -z "$engine" ]] || add_database_evidence "$engine" "local" "${path:-service $name}" "${state:-installed}" "medium" "Local service definition: $name"
   done < "$SERVICES"
 
-  while IFS=$'\t' read -r pid user group name executable command_line component || [[ -n "$pid" ]]; do
+  while IFS='|' read -r pid user group name executable command_line component || [[ -n "$pid" ]]; do
     [[ -n "$pid" ]] || continue
     category=$(service_category_for "$component $name $command_line")
     add_service_map_entry "$category" "${component:-$(component_for_process "$name $command_line")}" "running" "not attributed" "local" "process" "$name (PID $pid)" "process"
@@ -1769,14 +1955,14 @@ build_topology_model() {
   done < "$PROCESSES"
 
   local path_category path_value path_type owner path_group mode size modified note
-  while IFS=$'\t' read -r path_category path_value path_type owner path_group mode size modified note || [[ -n "$path_category" ]]; do
+  while IFS='|' read -r path_category path_value path_type owner path_group mode size modified note || [[ -n "$path_category" ]]; do
     [[ -n "$path_category" ]] || continue
     engine=$(database_engine_for_text "$path_category $path_value")
     [[ -z "$engine" ]] || add_database_evidence "$engine" "local" "$path_value" "filesystem footprint" "medium" "$path_category path observed"
   done < "$PATHS"
 
   local profile_file parameter value profile_source lower
-  while IFS=$'\t' read -r profile_file parameter value profile_source || [[ -n "$profile_file" ]]; do
+  while IFS='|' read -r profile_file parameter value profile_source || [[ -n "$profile_file" ]]; do
     [[ -n "$parameter" ]] || continue
     lower=${parameter,,}
     [[ "$value" == \[REDACTED* ]] && continue
@@ -1797,7 +1983,7 @@ build_topology_model() {
 
   declare -A category_count=() category_listener_count=()
   local map_category map_component map_status map_endpoint map_scope map_transport map_process map_source
-  while IFS=$'\t' read -r map_category map_component map_status map_endpoint map_scope map_transport map_process map_source || [[ -n "$map_category" ]]; do
+  while IFS='|' read -r map_category map_component map_status map_endpoint map_scope map_transport map_process map_source || [[ -n "$map_category" ]]; do
     [[ -n "$map_category" ]] || continue
     category_count[$map_category]=$(( ${category_count[$map_category]:-0} + 1 ))
     if [[ "${map_status^^}" =~ ^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$ ]]; then
@@ -1813,13 +1999,13 @@ build_topology_model() {
   done
 
   local remote_count local_count configured_count
-  remote_count=$(awk -F '\t' '$2=="remote"{n++} END{print n+0}' "$DATABASES")
-  local_count=$(awk -F '\t' '$2=="local"{n++} END{print n+0}' "$DATABASES")
-  configured_count=$(awk -F '\t' '$2=="configured"{n++} END{print n+0}' "$DATABASES")
+  remote_count=$(awk -F '|' '$2=="remote"{n++} END{print n+0}' "$DATABASES")
+  local_count=$(awk -F '|' '$2=="local"{n++} END{print n+0}' "$DATABASES")
+  configured_count=$(awk -F '|' '$2=="configured"{n++} END{print n+0}' "$DATABASES")
   if ((remote_count > 0 && local_count > 0)); then
     DATABASE_POSTURE_STATUS="mixed"
     DATABASE_POSTURE_SUMMARY="Both local database footprint and remote/non-loopback database connections were observed."
-    if awk -F '\t' '($2=="local" || $2=="remote") && $5=="high"{found=1} END{exit !found}' "$DATABASES"; then
+    if awk -F '|' '($2=="local" || $2=="remote") && $5=="high"{found=1} END{exit !found}' "$DATABASES"; then
       DATABASE_POSTURE_CONFIDENCE="high"
     else
       DATABASE_POSTURE_CONFIDENCE="medium"
@@ -1827,7 +2013,7 @@ build_topology_model() {
   elif ((remote_count > 0)); then
     DATABASE_POSTURE_STATUS="remote-observed"
     DATABASE_POSTURE_SUMMARY="A remote/non-loopback database connection was observed from a recognized local socket."
-    if awk -F '\t' '$2=="remote" && $5=="high"{found=1} END{exit !found}' "$DATABASES"; then
+    if awk -F '|' '$2=="remote" && $5=="high"{found=1} END{exit !found}' "$DATABASES"; then
       DATABASE_POSTURE_CONFIDENCE="high"
     else
       DATABASE_POSTURE_CONFIDENCE="medium"
@@ -1835,7 +2021,7 @@ build_topology_model() {
   elif ((local_count > 0)); then
     DATABASE_POSTURE_STATUS="local-observed"
     DATABASE_POSTURE_SUMMARY="Local database process, listener, or filesystem evidence was observed."
-    if awk -F '\t' '$2=="local" && $5=="high"{found=1} END{exit !found}' "$DATABASES"; then
+    if awk -F '|' '$2=="local" && $5=="high"{found=1} END{exit !found}' "$DATABASES"; then
       DATABASE_POSTURE_CONFIDENCE="high"
     else
       DATABASE_POSTURE_CONFIDENCE="medium"
@@ -1852,16 +2038,16 @@ build_topology_model() {
   fi
 
   local abap_status="Not observed" abap_confidence="low" abap_evidence="No ABAP dispatcher/system footprint observed."
-  if grep -Eiq $'\t(SAP NetWeaver|SAP Dispatcher/Work Process|SAP Dispatcher / SAP DIAG)' "$SYSTEMS" "$PROCESSES" "$SOCKETS" 2>/dev/null; then
+  if grep -Eiq '\|(SAP NetWeaver|SAP Dispatcher/Work Process|SAP Dispatcher / SAP DIAG)' "$SYSTEMS" "$PROCESSES" "$SOCKETS" 2>/dev/null; then
     abap_status="Observed"; abap_confidence="high"; abap_evidence="NetWeaver system, dispatcher process, or DIAG listener observed."
   fi
   add_capability "abap" "Application stack" "ABAP application server" "$abap_status" "$abap_confidence" "$abap_evidence" "Confirm active instances and roles with SAPControl and authenticated SAP administration."
 
-  if awk -F '\t' '$1=="SAP WebGUI artifact"{found=1} END{exit !found}' "$PATHS"; then
+  if awk -F '|' '$1=="SAP WebGUI artifact"{found=1} END{exit !found}' "$PATHS"; then
     add_capability "webgui" "Web & UI" "SAP WebGUI for ABAP" "Enabled (host artifact observed)" "medium" \
       "A WebGUI-named host artifact exists and an ABAP footprint is ${abap_status,,}." \
       "Confirm that /sap/bc/gui/sap/its/webgui is active and appropriately authenticated in SICF; a host artifact alone cannot prove runtime activation."
-  elif awk -F '\t' '$1 ~ /^SAP ICM HTTP/ && toupper($4) ~ /^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$/ {found=1} END{exit !found}' "$SOCKETS" &&
+  elif awk -F '|' '$1 ~ /^SAP ICM HTTP/ && toupper($4) ~ /^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$/ {found=1} END{exit !found}' "$SOCKETS" &&
        [[ "$abap_status" == "Observed" ]]; then
     add_capability "webgui" "Web & UI" "SAP WebGUI for ABAP" "Possible; not confirmed" "low" \
       "ABAP and ICM HTTP(S) evidence exists, but no WebGUI-named host artifact was observed." \
@@ -1872,17 +2058,17 @@ build_topology_model() {
       "Confirm /sap/bc/gui/sap/its/webgui status in SICF."
   fi
 
-  if awk -F '\t' '$1 ~ /^SAP (ICM|NetWeaver Java) HTTP/ && toupper($4) ~ /^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$/ {found=1} END{exit !found}' "$SOCKETS"; then
+  if awk -F '|' '$1 ~ /^SAP (ICM|NetWeaver Java) HTTP/ && toupper($4) ~ /^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$/ {found=1} END{exit !found}' "$SOCKETS"; then
     add_capability "http" "Web & UI" "SAP HTTP(S) application surface" "Listening" "high" "ICM or Java HTTP(S) listener observed." "Validate virtual hosts, TLS, authentication, and exposed ICF/Java applications from approved network zones."
   else
     add_capability "http" "Web & UI" "SAP HTTP(S) application surface" "Not observed" "medium" "No recognized application HTTP(S) listener was recorded." "A clean host result is not proof of firewall or proxy absence."
   fi
-  if awk -F '\t' '$1 ~ /^SAP RFC Gateway/ && toupper($4) ~ /^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$/ {found=1} END{exit !found}' "$SOCKETS"; then
+  if awk -F '|' '$1 ~ /^SAP RFC Gateway/ && toupper($4) ~ /^(LISTEN|LISTENING|UNCONN|UDP|BOUND)$/ {found=1} END{exit !found}' "$SOCKETS"; then
     add_capability "rfc" "Integration" "RFC Gateway" "Listening" "high" "RFC Gateway listener observed." "Validate effective secinfo/reginfo/prxyinfo and SNC with authorized SAP tooling."
   else
     add_capability "rfc" "Integration" "RFC Gateway" "Not observed" "medium" "No recognized RFC Gateway listener was recorded." "Confirm instance state and collection privilege."
   fi
-  if awk -F '\t' 'tolower($2) ~ /^snc\//{found=1} END{exit !found}' "$PROFILES"; then
+  if awk -F '|' 'tolower($2) ~ /^snc\//{found=1} END{exit !found}' "$PROFILES"; then
     add_capability "snc" "Transport security" "Secure Network Communications (SNC)" "Configured" "medium" "One or more snc/* profile parameters were observed." "Validate effective runtime values and negotiated QoP per connection; configuration presence is not proof of enforcement."
   else
     add_capability "snc" "Transport security" "Secure Network Communications (SNC)" "Not observed" "low" "No snc/* profile parameter was collected." "Check effective instance profiles and client/destination settings."
@@ -1941,7 +2127,7 @@ write_json_array() {
   printf '['
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "$line" ]] || continue
-    IFS=$'\t' read -r -a values <<< "$line"
+    IFS='|' read -r -a values <<< "$line"
     ((first_row)) || printf ','
     printf '\n    {'
     for i in "${!columns[@]}"; do
@@ -2005,7 +2191,7 @@ build_section_scores() {
   local id severity points rest key score capped grade label
   local count critical high medium low
   declare -A raw_score=() finding_count=() critical_count=() high_count=() medium_count=() low_count=()
-  while IFS=$'\t' read -r id severity points rest || [[ -n "$id" ]]; do
+  while IFS='|' read -r id severity points rest || [[ -n "$id" ]]; do
     [[ -n "$id" ]] || continue
     key=$(section_key_for_rule "$id")
     raw_score[$key]=$(( ${raw_score[$key]:-0} + points ))
@@ -2033,7 +2219,7 @@ build_section_scores() {
 write_section_scores_json() {
   local first=1 key title score grade label findings critical high medium low
   printf '['
-  while IFS=$'\t' read -r key title score grade label findings critical high medium low || [[ -n "$key" ]]; do
+  while IFS='|' read -r key title score grade label findings critical high medium low || [[ -n "$key" ]]; do
     [[ -n "$key" ]] || continue
     ((first)) || printf ','
     printf '\n    {"key":"%s","title":"%s","score":%s,"grade":"%s","label":"%s","findings":%s,"critical":%s,"high":%s,"medium":%s,"low":%s}' \
@@ -2069,16 +2255,17 @@ generate_json() {
     printf '"services":'; write_json_array "$SERVICE_MAP" category component status endpoint scope transport process source; printf ','
     printf '"capabilities":'; write_json_array "$CAPABILITIES" key category title status confidence evidence validation; printf ','
     printf '"databases":'; write_json_array "$DATABASES" engine placement endpoint state confidence evidence; printf '},\n'
-    printf '  "summary":{"findings":%s,"critical":%s,"high":%s,"medium":%s,"low":%s,"systems":%s,"services":%s,"processes":%s,"sockets":%s,"ssfs":%s,"tools":%s},\n' \
+    printf '  "summary":{"findings":%s,"critical":%s,"high":%s,"medium":%s,"low":%s,"systems":%s,"services":%s,"processes":%s,"sockets":%s,"socket_candidates":%s,"ssfs":%s,"tools":%s},\n' \
       "$(count_rows "$FINDINGS")" "$(count_severity Critical)" "$(count_severity High)" \
       "$(count_severity Medium)" "$(count_severity Low)" "$(count_rows "$SYSTEMS")" \
       "$(count_rows "$SERVICES")" "$(count_rows "$PROCESSES")" "$(count_rows "$SOCKETS")" \
-      "$(count_rows "$SSFS")" "$(count_rows "$TOOLS")"
+      "$(count_rows "$SOCKET_CANDIDATES")" "$(count_rows "$SSFS")" "$(count_rows "$TOOLS")"
     printf '  "findings":'; write_json_array "$FINDINGS" id severity points title asset evidence recommendation reference; printf ',\n'
     printf '  "systems":'; write_json_array "$SYSTEMS" sid stack instances root source; printf ',\n'
     printf '  "services":'; write_json_array "$SERVICES" name state start_mode account path description; printf ',\n'
     printf '  "processes":'; write_json_array "$PROCESSES" pid user group name executable command component; printf ',\n'
-    printf '  "sockets":'; write_json_array "$SOCKETS" classification transport protocol state local remote exposure pid process service; printf ',\n'
+    printf '  "sockets":'; write_json_array "$SOCKETS" classification transport protocol state local remote exposure pid process service confidence basis; printf ',\n'
+    printf '  "socket_candidates":'; write_json_array "$SOCKET_CANDIDATES" classification transport protocol state local remote pid process reason; printf ',\n'
     printf '  "paths":'; write_json_array "$PATHS" category path type owner group mode size_bytes modified note; printf ',\n'
     printf '  "ssfs":'; write_json_array "$SSFS" family sid role path size_bytes owner group mode detail; printf ',\n'
     printf '  "tools":'; write_json_array "$TOOLS" name component path source owner group mode size_bytes sha256; printf ',\n'
@@ -2104,7 +2291,7 @@ render_table_rows() {
   local line values value class="" i
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "$line" ]] || continue
-    IFS=$'\t' read -r -a values <<< "$line"
+    IFS='|' read -r -a values <<< "$line"
     class=""
     if ((class_col >= 0)); then class=" severity-${values[$class_col],,}"; fi
     printf '<tr class="search-row%s">' "$class"
@@ -2117,7 +2304,7 @@ render_table_rows() {
 }
 
 count_rows() { awk 'NF {n++} END {print n+0}' "$1"; }
-count_severity() { awk -F '\t' -v s="$1" '$2==s {n++} END {print n+0}' "$FINDINGS"; }
+count_severity() { awk -F '|' -v s="$1" '$2==s {n++} END {print n+0}' "$FINDINGS"; }
 
 score_class_for_grade() {
   case "${1,,}" in
@@ -2131,7 +2318,7 @@ score_class_for_grade() {
 
 render_section_score_cards() {
   local key title score grade label findings critical high medium low score_class
-  while IFS=$'\t' read -r key title score grade label findings critical high medium low || [[ -n "$key" ]]; do
+  while IFS='|' read -r key title score grade label findings critical high medium low || [[ -n "$key" ]]; do
     [[ -n "$key" ]] || continue
     score_class=$(score_class_for_grade "$grade")
     printf '<a class="score-card %s" href="#findings-%s"><div class="score-card-head"><h3>%s</h3><span class="grade">%s</span></div>' \
@@ -2146,14 +2333,14 @@ render_section_score_cards() {
 render_finding_sections() {
   local section_key section_name score grade label findings critical high medium low
   local id severity points title asset evidence recommendation reference current_key severity_class
-  while IFS=$'\t' read -r section_key section_name score grade label findings critical high medium low || [[ -n "$section_key" ]]; do
+  while IFS='|' read -r section_key section_name score grade label findings critical high medium low || [[ -n "$section_key" ]]; do
     [[ -n "$section_key" ]] || continue
     printf '<details id="findings-%s" class="report-section finding-section"><summary><h2>%s findings</h2><span class="count-badge">%s finding(s) · %s/100 · grade %s</span></summary><div class="section-body">' \
       "$(html_escape "$section_key")" "$(html_escape "$section_name")" "$findings" "$score" "$(html_escape "$grade")"
     printf '<div class="section-head"><div><strong>%s</strong><div class="muted">%s critical · %s high · %s medium · %s low</div></div><input class="filter" placeholder="Filter %s findings…" data-target="finding-list-%s"></div><div class="finding-list" id="finding-list-%s">\n' \
       "$(html_escape "$label")" "$critical" "$high" "$medium" "$low" "$(html_escape "$section_name")" "$(html_escape "$section_key")" "$(html_escape "$section_key")"
     if ((findings == 0)); then printf '<p class="empty">No findings recorded for this risk section.</p>'; fi
-    while IFS=$'\t' read -r id severity points title asset evidence recommendation reference || [[ -n "$id" ]]; do
+    while IFS='|' read -r id severity points title asset evidence recommendation reference || [[ -n "$id" ]]; do
       [[ -n "$id" ]] || continue
       current_key=$(section_key_for_rule "$id")
       [[ "$current_key" == "$section_key" ]] || continue
@@ -2170,7 +2357,7 @@ render_finding_sections() {
 render_topology_graph() {
   local id label kind scope status detail found=0
   printf '<div class="topology-graph" role="img" aria-label="Observed SAP services connect through the audited host to database and remote peers"><div class="graph-lane"><h3>Enabled and observed service groups</h3>'
-  while IFS=$'\t' read -r id label kind scope status detail || [[ -n "$id" ]]; do
+  while IFS='|' read -r id label kind scope status detail || [[ -n "$id" ]]; do
     [[ "$kind" == "service-group" ]] || continue
     found=1
     printf '<div class="graph-node service-node"><strong>%s</strong><small>%s</small></div>' "$(html_escape "$label")" "$(html_escape "$detail")"
@@ -2179,7 +2366,7 @@ render_topology_graph() {
   printf '</div><div class="graph-connector"><span>runs / listens</span><b>→</b></div><div class="graph-host"><span>SAP host</span><strong>%s</strong><small>%s system(s) · %s socket(s)</small></div><div class="graph-connector"><span>connects to</span><b>→</b></div><div class="graph-lane"><h3>Database and remote peers</h3>' \
     "$(html_escape "$HOST_NAME")" "$(count_rows "$SYSTEMS")" "$(count_rows "$SOCKETS")"
   found=0
-  while IFS=$'\t' read -r id label kind scope status detail || [[ -n "$id" ]]; do
+  while IFS='|' read -r id label kind scope status detail || [[ -n "$id" ]]; do
     [[ "$kind" == "database" || "$kind" == "remote-peer" ]] || continue
     found=1
     printf '<div class="graph-node %s-node"><strong>%s</strong><span class="node-scope">%s</span><small>%s</small></div>' \
@@ -2193,22 +2380,22 @@ render_service_map_groups() {
   local category count map_category component status endpoint scope transport process source
   while IFS= read -r category; do
     [[ -n "$category" ]] || continue
-    count=$(awk -F '\t' -v c="$category" '$1==c{n++} END{print n+0}' "$SERVICE_MAP")
+    count=$(awk -F '|' -v c="$category" '$1==c{n++} END{print n+0}' "$SERVICE_MAP")
     printf '<details class="technical-group service-category"><summary><span>%s</span><span class="summary-meta">%s evidence record(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Component</th><th>Status</th><th>Endpoint</th><th>Scope</th><th>Transport</th><th>Process/account</th><th>Source</th></tr></thead><tbody>' \
       "$(html_escape "$category")" "$count"
-    while IFS=$'\t' read -r map_category component status endpoint scope transport process source || [[ -n "$map_category" ]]; do
+    while IFS='|' read -r map_category component status endpoint scope transport process source || [[ -n "$map_category" ]]; do
       [[ "$map_category" == "$category" ]] || continue
       printf '<tr class="search-row"><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
         "$(html_escape "$component")" "$(html_escape "$status")" "$(html_escape "$endpoint")" "$(html_escape "$scope")" \
         "$(html_escape "$transport")" "$(html_escape "$process")" "$(html_escape "$source")"
     done < "$SERVICE_MAP"
     printf '</tbody></table></div></div></details>'
-  done < <(cut -f1 "$SERVICE_MAP" | sort -u)
+  done < <(cut -d '|' -f1 "$SERVICE_MAP" | sort -u)
 }
 
 render_capability_rows() {
   local key category title status confidence evidence validation status_class
-  while IFS=$'\t' read -r key category title status confidence evidence validation || [[ -n "$key" ]]; do
+  while IFS='|' read -r key category title status confidence evidence validation || [[ -n "$key" ]]; do
     [[ -n "$key" ]] || continue
     case "$status" in
       Enabled*) status_class=enabled ;;
@@ -2226,16 +2413,16 @@ render_capability_rows() {
 }
 
 render_socket_rows() {
-  local requested=$1 classification transport protocol state local_ep remote_ep exposure pid process service
-  while IFS=$'\t' read -r classification transport protocol state local_ep remote_ep exposure pid process service || [[ -n "$classification" ]]; do
+  local requested=$1 classification transport protocol state local_ep remote_ep exposure pid process service confidence basis
+  while IFS='|' read -r classification transport protocol state local_ep remote_ep exposure pid process service confidence basis || [[ -n "$classification" ]]; do
     [[ -n "$classification" ]] || continue
     if [[ "$requested" == "connected" ]]; then [[ "$exposure" == "connected" ]] || continue
     else [[ "$exposure" != "connected" ]] || continue
     fi
-    printf '<tr class="search-row"><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
+    printf '<tr class="search-row"><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
       "$(html_escape "$classification")" "$(html_escape "$transport")" "$(html_escape "$protocol")" "$(html_escape "$state")" \
       "$(html_escape "$local_ep")" "$(html_escape "$remote_ep")" "$(html_escape "$exposure")" "$(html_escape "$pid")" \
-      "$(html_escape "$process")" "$(html_escape "$service")"
+      "$(html_escape "$process")" "$(html_escape "$service")" "$(html_escape "$confidence")" "$(html_escape "$basis")"
   done < "$SOCKETS"
 }
 
@@ -2243,33 +2430,34 @@ render_path_groups() {
   local category count row_category path_value type owner group mode size modified note
   while IFS= read -r category; do
     [[ -n "$category" ]] || continue
-    count=$(awk -F '\t' -v c="$category" '$1==c{n++} END{print n+0}' "$PATHS")
+    count=$(awk -F '|' -v c="$category" '$1==c{n++} END{print n+0}' "$PATHS")
     printf '<details class="technical-group path-category"><summary><span>%s</span><span class="summary-meta">%s path(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Path</th><th>Type</th><th>Owner</th><th>Group</th><th>Mode</th><th>Bytes</th><th>Modified</th><th>Note</th></tr></thead><tbody>' "$(html_escape "$category")" "$count"
-    while IFS=$'\t' read -r row_category path_value type owner group mode size modified note || [[ -n "$row_category" ]]; do
+    while IFS='|' read -r row_category path_value type owner group mode size modified note || [[ -n "$row_category" ]]; do
       [[ "$row_category" == "$category" ]] || continue
       printf '<tr class="search-row"><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>' \
         "$(html_escape "$path_value")" "$(html_escape "$type")" "$(html_escape "$owner")" "$(html_escape "$group")" \
         "$(html_escape "$mode")" "$(html_escape "$size")" "$(html_escape "$modified")" "$(html_escape "$note")"
     done < "$PATHS"
     printf '</tbody></table></div></div></details>'
-  done < <(cut -f1 "$PATHS" | sort -u)
+  done < <(cut -d '|' -f1 "$PATHS" | sort -u)
 }
 
 generate_html() {
   log "Writing self-contained HTML report"
-  local finding_count system_count service_count process_count socket_count ssfs_count tool_count
+  local finding_count system_count service_count process_count socket_count socket_candidate_count ssfs_count tool_count
   local profile_count path_count assessment_count coverage_count
   local service_map_count capability_count database_count edge_count listener_count connected_count
   local critical high medium low grade grade_text
   finding_count=$(count_rows "$FINDINGS"); system_count=$(count_rows "$SYSTEMS")
   service_count=$(count_rows "$SERVICES"); process_count=$(count_rows "$PROCESSES")
-  socket_count=$(count_rows "$SOCKETS"); ssfs_count=$(count_rows "$SSFS"); tool_count=$(count_rows "$TOOLS")
+  socket_count=$(count_rows "$SOCKETS"); socket_candidate_count=$(count_rows "$SOCKET_CANDIDATES")
+  ssfs_count=$(count_rows "$SSFS"); tool_count=$(count_rows "$TOOLS")
   profile_count=$(count_rows "$PROFILES"); path_count=$(count_rows "$PATHS")
   assessment_count=$(count_rows "$ASSESSMENT"); coverage_count=$(count_rows "$COVERAGE")
   service_map_count=$(count_rows "$SERVICE_MAP"); capability_count=$(count_rows "$CAPABILITIES")
   database_count=$(count_rows "$DATABASES"); edge_count=$(count_rows "$TOPOLOGY_EDGES")
-  listener_count=$(awk -F '\t' '$7!="connected"{n++} END{print n+0}' "$SOCKETS")
-  connected_count=$(awk -F '\t' '$7=="connected"{n++} END{print n+0}' "$SOCKETS")
+  listener_count=$(awk -F '|' '$7!="connected"{n++} END{print n+0}' "$SOCKETS")
+  connected_count=$(awk -F '|' '$7=="connected"{n++} END{print n+0}' "$SOCKETS")
   critical=$(count_severity Critical); high=$(count_severity High); medium=$(count_severity Medium); low=$(count_severity Low)
   grade=$(get_risk_grade)
   grade_text=$(get_risk_label)
@@ -2338,15 +2526,15 @@ EOF
     render_table_rows "$PROCESSES"
     cat <<EOF
 </tbody></table></div></div></details></div></div></details>
-<details id="sockets" class="report-section"><summary><h2>Listening endpoints and open connections</h2><span class="count-badge">$listener_count listener(s) · $connected_count connection(s)</span></summary><div class="section-body"><div class="section-head"><div class="muted">Separated listener and connection evidence; no remote probes were sent</div><input class="filter" placeholder="Filter network evidence…" data-target="socket-groups"></div><div id="socket-groups"><details class="technical-group" open><summary><span>Listening endpoints</span><span class="summary-meta">$listener_count observation(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>Exposure</th><th>PID</th><th>Process</th><th>Service</th></tr></thead><tbody>
+<details id="sockets" class="report-section"><summary><h2>Listening endpoints and open connections</h2><span class="count-badge">$listener_count listener(s) · $connected_count connection(s) · $socket_candidate_count uncorroborated</span></summary><div class="section-body"><div class="section-head"><div class="muted">Only process-owned or host-correlated sockets are promoted as SAP evidence; ambiguous port matches remain separate and cannot create findings.</div><input class="filter" placeholder="Filter network evidence…" data-target="socket-groups"></div><div id="socket-groups"><details class="technical-group" open><summary><span>Listening endpoints</span><span class="summary-meta">$listener_count observation(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>Exposure</th><th>PID</th><th>Process</th><th>Service</th><th>Confidence</th><th>Evidence basis</th></tr></thead><tbody>
 EOF
     render_socket_rows "listening"
     cat <<EOF
-</tbody></table></div></div></details><details class="technical-group" open><summary><span>Established and open connections</span><span class="summary-meta">$connected_count observation(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>Exposure</th><th>PID</th><th>Process</th><th>Service</th></tr></thead><tbody>
+</tbody></table></div></div></details><details class="technical-group" open><summary><span>Established and open connections</span><span class="summary-meta">$connected_count observation(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>Exposure</th><th>PID</th><th>Process</th><th>Service</th><th>Confidence</th><th>Evidence basis</th></tr></thead><tbody>
 EOF
     render_socket_rows "connected"
     cat <<EOF
-</tbody></table></div></div></details></div></div></details>
+</tbody></table></div></div></details><details class="technical-group"><summary><span>Uncorroborated SAP-port candidates</span><span class="summary-meta">$socket_candidate_count candidate(s), excluded from findings and topology</span></summary><div class="technical-group-body"><p class="muted">These are retained to avoid losing possible evidence when ownership is unavailable, but a port number by itself does not establish SAP.</p><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table><thead><tr><th>Candidate classification</th><th>Transport</th><th>Protocol</th><th>State</th><th>Local</th><th>Remote</th><th>PID</th><th>Process</th><th>Reason not promoted</th></tr></thead><tbody>$(render_table_rows "$SOCKET_CANDIDATES")</tbody></table></div></div></details></div></div></details>
 <details id="ssfs" class="report-section"><summary><h2>SAP secure stores (SSFS)</h2><span class="count-badge">$ssfs_count artifact(s)</span></summary><div class="section-body"><div class="section-head"><div class="muted">Metadata-only coverage: ABAP/RSEC, HANA instance, HANA System-PKI, hdbuserstore, enhanced LKY, and Cloud Connector</div><input class="filter" placeholder="Filter SSFS…" data-target="ssfs-table"></div>
 <p class="notice">The presence of a <code>.DAT</code> and <code>.KEY</code> pair is operational evidence—not a guarantee of secure key lifecycle. Conversely, a missing key can mean a separate configured path; Cloud Connector and default-key contexts require product-specific confirmation. No record names, values, HMAC keys, master keys, or decrypted bytes are included.</p>
 <details class="technical-group" open><summary><span>Secure-store artifacts</span><span class="summary-meta">$ssfs_count metadata record(s)</span></summary><div class="technical-group-body"><div class="scroll-hint">Scroll horizontally to see all columns →</div><div class="table-wrap"><table id="ssfs-table"><thead><tr><th>Family</th><th>SID/store</th><th>Role</th><th>Path</th><th>Bytes</th><th>Owner</th><th>Group</th><th>Mode</th><th>Safe inspection detail</th></tr></thead><tbody>
@@ -2421,10 +2609,10 @@ EOF
 show_banner
 log "Starting SAPstract $VERSION host-local audit"
 collect_host_metadata
+discover_systems
 collect_processes
 collect_services
 collect_sockets
-discover_systems
 scan_known_paths
 scan_profiles_and_acls
 scan_ssfs
