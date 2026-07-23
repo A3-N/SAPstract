@@ -1,295 +1,292 @@
-# sapstract
+# SAPstract
 
+SAPstract is an all-in-one SAP security repository with two deliberately
+separated components:
 
-FileSystem Audit. 
+- a read-only, host-local SAP footprint and security-posture collector for
+  Linux/Unix and Windows; and
+- a dependency-free Python library and CLI for reading, writing, validating
+  and inspecting SAP Secure Storage in the File System (SSFS).
 
-#### MAIN
-/usr
-/usr/sap
-\usr\sap\<SID>\SYS\global\security\rsecssfs
-\usr\sap\<SID>\SYS\profile
-\usr\sap\<SID>\SYS\exe\jvm\NTAMD64
-	\usr\sap\<SID>\SYS\exe\jvm\NTAMD64\sapjvm_8.1.103\sapjvm_8\bin
-	\usr\sap\<SID>\SYS\exe\jvm\NTAMD64\sapjvm_8.1.103\sapjvm_8\jre\bin
-\usr\sap\<SID>\J70
-\Program Files\SAP
-	\Program Files\SAP\hostctrl
-		exe/
-		work/
-\Program Files\sapinst_instdir\NW750\SYB\INSTALL\STANDALONE\STD\PICP
-\Program Files\sapinst_instdir\NW750\SYB\INSTALL\STD
-\sybase\<SID>
-#### TOOLS:
-\Program Files (x86)\SAP MDM 7.1
-\usr\sap\<SID>\SYS\exe\uc\NTAMD64
-	rsecssfx
-\Program Files\SAP
-	\Program Files\SAP\SAP MMC SnapIn
-\SUM\SUM\abap
-\SUM\SUM\jvm\jre
-Program Files\sap\hdbclient
-/usr/sap/<SID>/<Instance>/work/
+The host collector can run on a live SAP host or against a mounted offline
+filesystem. It discovers what SAP software is present, which SAP services are
+running or connected, and which local configuration, permission or exposure
+conditions deserve remediation. It produces a self-contained HTML report and
+a JSON evidence companion.
 
-#### SUB
-/SAP
-/sap
+The design is similar to PingCastle in one important respect: the report
+prioritizes observed risks and explains why each matters and what to change.
+The score is a triage aid, not an SAP certification or a claim that a finding
+is remotely exploitable.
 
-#### FILEEXT
-.SCA
-.SAR
+## Repository layout
 
+| Path | Purpose | Runtime | License |
+|---|---|---|---|
+| `SAPaudit.sh` | Linux/Unix host posture collector | Bash 4+ | GPL-3.0 |
+| `SAPaudit.ps1` | Windows/cross-platform host posture collector | Windows PowerShell 5.1+ or PowerShell 7+ | GPL-3.0 |
+| `python/` | Importable `sapstract` SSFS package, CLI and source documentation | Python 3.11+ | MIT |
+| `docs/` | Host-audit rule catalog and OWASP CBAS traceability | None | Repository documentation |
 
----
+The audit collector and Python SSFS package have independent versions. Their
+shared repository name does not mean the collector imports the Python package.
 
-SAP Enum and Exploit
+## Host-audit collectors
 
-```
-.
-├── SAPstract.py
-├── LICENSE
-├── README.md
-├── db/
-│   └── sapstract_sessions.db
-│
-├── modules/
-│   ├── ui.py
-│   ├── scan.py
-│   ├── sap.py
-│   ├── target.py
-│   ├── help.py
-│   ├── session.py
-│   ├── exploit.py
-│   │
-│   ├── scans/
-│   │   ├── ports.py
-│   │   └── web.py
-│   │
-│   ├── docs/
-│   │   ├── manual.py
-│   │   ├── wiki.py
-│   │   ├── 0080_http_generic.json
-│   │   ├── 21212_sapinst.json
-│   │   ├── 21213_sapinst_https.json
-│   │   ├── 395x_its_http.json
-│   │   ├── 4NN80_igs_admin.json
-│   │   ├── 4239_upgrade_assistant.json
-│   │   ├── 443_https_interface.json
-│   │   ├── 443NN_icm_https.json
-│   │   ├── 444NN_msgserver_https.json
-│   │   ├── 5NN00_java_http.json
-│   │   ├── 5NN01_java_https.json
-│   │   ├── 5NN05_java_p4_http.json
-│   │   ├── 5NN06_java_p4_https.json
-│   │   ├── 5NN19_sdm_http.json
-│   │   ├── 80NN_icm_http.json
-│   │   ├── 81NN_msgserver_http.json
-│   │   ├── m_ClientSIDOverview.json
-│   │   ├── m_DefaultUsers.json
-│   │   ├── m_SAP_Tech_Stack.json
-│   │   ├── m_TCodes.json
-│   │   └── m_TCodes_Attack_Path.json
-│   │
-│   ├── exploit/
-│   │   ├── 80.py
-│   │   ├── 80NN.py
-│   │   ├── 81NN.py
-│   │   ├── 21212.py
-│   │   ├── 21213.py
-│   │   ├── 4NN80.py
-│   │   ├── 4239.py
-│   │   ├── 443.py
-│   │   ├── 443NN.py
-│   │   ├── 444NN.py
-│   │   ├── 5NN00.py
-│   │   ├── 5NN01.py
-│   │   ├── 5NN05.py
-│   │   ├── 5NN06.py
-│   │   ├── 5NN19.py
-│   │   └── ITS.py
-│   │
-│   └── src/
-│       ├── ports_label.py
-│       │
-│       ├── wordlists/
-│       │   └── sap_paths.txt
-│       │
-│       ├── web/
-│       │   ├── skeleton.py
-│       │   ├── 80.py
-│       │   ├── 80NN.py
-│       │   ├── 81NN.py
-│       │   ├── 21212.py
-│       │   ├── 21213.py
-│       │   ├── 4NN80.py
-│       │   ├── 4239.py
-│       │   ├── 443.py
-│       │   ├── 443NN.py
-│       │   ├── 444NN.py
-│       │   ├── 5NN00.py
-│       │   ├── 5NN01.py
-│       │   ├── 5NN05.py
-│       │   ├── 5NN06.py
-│       │   ├── 5NN19.py
-│       │   └── ITS.py
-│       │
-│       └── vuln/
-│           ├── skeleton.py
-│           └── checkCTC.py
+- `SAPaudit.sh`: Bash 4+ for Linux/Unix hosts.
+- `SAPaudit.ps1`: Windows PowerShell 5.1+ and PowerShell 7+ on Windows,
+  Linux and macOS.
+
+The retired Python host collector remains removed. The shell collectors have
+no PySAP, Scapy, Python, package-manager, browser-CDN or network-scanner
+runtime dependency. PySAP is used only as a research reference for SAP
+protocol and file-format recognition.
+
+## Python SSFS package
+
+The separate component under [`python/`](python/) is the previously standalone
+`sapstract` 0.2.0 package. It supports the Python API and command-line
+interface without PySAP, Scapy, `cryptography` or other runtime dependencies.
+
+Run it directly from the checkout:
+
+```bash
+cd python
+PYTHONPATH=src python3 -m sapstract --help
 ```
 
-### Next on da list
+Install it as a normal package:
 
-Add the fuzz.py next and do the below checks while running
-
-#### BIZSPLOIT VULNS ADD:
-- checkCTC
-- icmAdmin
-- icmErrorInfodisc
-- icmInfo
-- icmPing
-- icmSOAPRFC
-- icmWebgui
-
----
-
-### TODO 
-
-pysap python3
-
-TODO BIZSPLOIT:
-bruteLogin.py
-checkAnonKM
-checkGwMon
-checkRFCEXEC
-checkRFCPrivs
-connectExtRFC
-getDocu
-mcInterface
-oraAuth
-registerEXTServer
-sapinfo
-saprouterNative
-
----
-
-```
-# Netweaver ABAP + ICM
-# 80NN      -> HTTP
-# 443NN     -> HTTPS
-# 81NN      -> HTTP
-# 444NN     -> HTTPS
-# 32NN      -> X       (SAP Dispatcher)
-# 33NN      -> X       (SAP Gateway)
-# 48NN      -> X       (SAP Secure Gateway)
-# 36NN      -> X       (SAP Message Server)
-
-# Netweaver JAVA
-# 5NN00     -> HTTP
-# 5NN01     -> HTTPS
-# 5NN05     -> HTTP    (P4 over HTTP)
-# 5NN06     -> HTTPS   (P4 over HTTPS)
-# 5NN02     -> X       (IIOP Init)
-# 5NN03     -> X       (IIOP SSL)
-# 5NN04     -> X       (P4 Remoting)
-# 5NN07     -> X       (IIOP)
-# 5NN08     -> X       (Telnet interface)
-# 5NN10     -> X       (JMS / Messaging)
-
-# Admin Services
-# 1128      -> X       (SAPHostControl)
-# 1129      -> X       (SAPHostControlS)
-# 5NN13     -> X       (SAP Start Service)
-# 5NN14     -> X       (SAP Start Service)
-
-# SAP IGS
-# 4NN80     -> HTTP
-# 4NN00     -> X       (IGS Multiplexer)
-# 4NN01     -> X       (IGS Portwatcher)
-# 4NN02     -> X       (IGS Portwatcher)
-
-# Install Tools
-# 5NN19     -> HTTP    (SAP SDM HTTP)
-# 5NN17     -> X       (SAP SDM Admin)
-# 5NN18     -> X       (SAP SDM GUI)
-# 21212     -> HTTP    (SAPinst - sometimes HTTP UI)
-# 21213     -> HTTP    (SAPinst - sometimes HTTP UI)
-# 59975     -> X       (SAPinst AS400)
-# 59976     -> X       (SAPinst AS400)
-# 4238      -> X       (Upgrade Monitor)
-# 4239      -> HTTP    (Upgrade UA HTTP)
-# 4240      -> X       (Upgrade R3up)
-# 4241      -> X       (Upgrade UA)
-
-# Utilities
-# 3299      -> X       (SAProuter)
-# 3298      -> X       (SAP niping)
-# 515       -> X       (SAPlpd)
-
-# ITS
-# 3950      -> HTTP
-# 3951      -> HTTP
-# 3954      -> HTTP
-# 3964      -> HTTP
-
-# Databases
-# 1433      -> X       (MSSQL)
-# 1527      -> X       (Oracle)
-# 50000     -> X       (DB6)
-# 4402      -> X       (DB2)
-# 7200      -> X       (MaxDB)
-# 7210      -> X
-# 7269      -> X
-# 7270      -> X
-# 7275      -> X
-
-# Common Internet Services
-# 80        -> HTTP
-# 443       -> HTTPS
-# 21        -> X       (FTP)
-# 22        -> X       (SSH)
-# 23        -> X       (Telnet)
-# 25        -> X       (SMTP)
-# 110       -> X       (POP)
-# 3389      -> X       (RDP)
+```bash
+python3 -m pip install ./python
+sapstract --version
 ```
 
----
+The package covers legacy/compiled and enhanced type-2 SSFS keys, LKY/LPS,
+explicit SCC default-key compatibility, individual keys, history, validation,
+mutation, inspection and key rotation. Missing key material never selects the
+compiled default implicitly. Start with the
+[Python package guide](python/README.md), [API reference](python/docs/API.md)
+and [operations guide](python/docs/OPERATIONS.md).
 
-## GUI4Windows
+Unlike the passive host collector, the Python package can deliberately return
+clear bytes to its caller and can modify stores. Use protected input files or
+standard input, preserve matched backups, validate with official SAP tooling,
+and never use the development-only SCC/default-key mode as a modern
+secret-storage design. SAP-proprietary binaries and local validation stores are
+not bundled in this repository or Python distribution.
 
-- SAP 3D Visual Enterprise Viewer
-- SAP Business Client
-- SAP Business Explorer
-- SAP GUI for Windows
-- SAPSetup Automatic Workstation Update Service
-- ? SNC Client Enccryption 2.0
+## What it audits
 
+- SAP services and processes, executable paths and service accounts.
+- Listening and connected sockets, including SAP port families and SAP-owned
+  processes on nonstandard ports.
+- An evidence-backed mini topology graph that groups enabled/observed SAP
+  services, maps established peers, and distinguishes locally observed,
+  remotely observed, configured-only and undetermined database placement.
+- Capability indicators for ABAP, Java, WebGUI, ICM HTTP(S), RFC Gateway,
+  SNC, SCC, SAProuter, Web Dispatcher, IGS, Host Agent and the data tier.
+  WebGUI host artifacts are reported separately from authoritative SICF state.
+- SID and instance footprints for ABAP, Java, HANA, Host Agent, SCC,
+  SAProuter, Web Dispatcher, IGS, ASE and related tools.
+- Profiles and security parameters for RFC Gateway, Message Server, SNC,
+  Start Service, ICM/Web Dispatcher, IGS, logging, RFC callback/UCON,
+  identity/password policy, OS commands, HANA INI and secure-store paths.
+- `secinfo`, `reginfo`, `prxyinfo`, `saprouttab`, message-server and ICM ACL
+  presence, permissions, empty files and broad wildcard rules.
+- Standard SAP paths, owners, Unix modes and Windows ACL summaries.
+- Executable hashes; Windows Authenticode status and signer when available.
+- Audit/system/trace files, PSE/Credv2/Java key stores, transport directories,
+  SAP archives, Java `SecStore`/Download Manager artifacts and SAP GUI
+  input-history metadata.
+- SSFS metadata for ABAP/RSEC, HANA instance SSFS, HANA System-PKI,
+  hdbuserstore, enhanced `LKY`/type-2 key protection and SAP Cloud Connector.
+  It recognizes safe headers, record counts and data/key pair state without
+  exposing record names, values or key bytes.
+- A framework assessment map that says which areas were automated, which have
+  only partial host evidence, and which require authenticated or active work.
+
+Research traceability—including every reviewed OWASP CBAS project page, all
+100 SSVS controls, all 74 playbook pages and every Attack Surface Discovery
+check—is in [docs/OWASP_CBAS_COVERAGE.md](docs/OWASP_CBAS_COVERAGE.md).
+The expanded source-by-source gap ledger covers the complete PySAP
+documentation/notebooks and every HackTricks SAP/SAProuter reference in
+[docs/SECURITY_SOURCE_GAP_ANALYSIS.md](docs/SECURITY_SOURCE_GAP_ANALYSIS.md).
+The complete detection list and interpretation caveats are in
+[docs/RULE_CATALOG.md](docs/RULE_CATALOG.md).
+The topology evidence, database-port mappings, confidence levels and known
+limitations are documented in
+[docs/TOPOLOGY_MODEL.md](docs/TOPOLOGY_MODEL.md).
+
+## Host-collector safety boundary
+
+The host collectors do not:
+
+- connect to or scan another host;
+- call SAPControl, RFC, HTTP or administrative methods;
+- try credentials, brute-force users or register an RFC program;
+- exploit a vulnerability or execute an SAP/OS command;
+- decrypt SSFS, PSE, Credv2 or SAP GUI history;
+- read key bytes, private keys, passwords, tokens or SSFS values;
+- label a product vulnerable from a version string alone; or
+- change permissions, profiles, services, registry values or SAP data.
+
+The generated report can still contain sensitive topology, usernames, paths,
+profile values that are not classified as secrets, and hashes. Protect it as
+audit evidence.
+
+## Run on Linux/Unix
+
+```bash
+chmod 750 SAPaudit.sh
+sudo ./SAPaudit.sh --output-dir ./reports
 ```
-ABAP / ICM & MsgServer HTTP/S
-80NN
-443NN
-81NN
-444NN
 
-Java HTTP/S variants
-5NN00
-5NN01
-5NN05
-5NN06
-5NN19
+Elevation is recommended for complete process ownership, socket attribution
+and protected-path access. A non-root run is supported and records the
+coverage gap.
 
-IGS HTTP Admin
-4NN80
+Useful options:
 
-ITS (Internet Transaction Server)
-ITS
-
-Common fixed HTTP/S
-80
-443
-
-SAPinst / Upgrade HTTP UIs
-21212
-21213
-4239
+```text
+--output-dir DIR       report directory; defaults to the current directory
+--report FILE          explicit HTML path
+--json FILE            explicit JSON path
+--root DIR             alternate/offline filesystem root
+--host-label NAME      override report hostname for an offline image
+--report-note TEXT     add a scope/context note to HTML and JSON
+--max-files N          cap per broad file scan; default 6000
+--quiet                suppress progress except warnings/final paths
+--no-color             disable terminal colors
 ```
+
+Example offline audit:
+
+```bash
+sudo mount -o ro /dev/mapper/sap-root /mnt/sap-root
+./SAPaudit.sh \
+  --root /mnt/sap-root \
+  --output-dir ./reports/offline
+```
+
+## Run on Windows
+
+From an elevated Windows PowerShell 5.1 or PowerShell 7 terminal:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\SAPaudit.ps1 -OutputDirectory C:\Audit\SAPstract
+```
+
+Explicit paths:
+
+```powershell
+.\SAPaudit.ps1 `
+  -ReportPath C:\Audit\SAPstract\host.html `
+  -JsonPath C:\Audit\SAPstract\host.json
+```
+
+PowerShell also supports `-RootPath`, `-HostLabel`, `-ReportNote`, `-MaxFiles`
+and `-Quiet`. On Windows it records discretionary
+ACL summaries and Authenticode evidence in addition to the common
+cross-platform fields.
+
+`SAPaudit.ps1` is a single cross-version collector for both Windows
+PowerShell 5.1 and PowerShell 7+. Its `#requires -version 5.1` declaration is
+the minimum supported version, not a request to run only on 5.1. Keeping one
+file ensures both runtimes use the same rules and report schema.
+
+Both collectors display the original SAPstract startup banner during an
+interactive run. Use `--quiet` or `-Quiet` to suppress it in automation.
+
+## Output and interpretation
+
+Both collectors emit schema `sapstract-audit/v2`.
+
+The self-contained HTML defaults to a plain light theme and includes a
+persistent light/dark toggle whose dark palette is neutral charcoal gray. It
+contains:
+
+- five section scores plus the backward-compatible aggregate index;
+- a mini service/connection graph and explicit database-placement posture;
+- a capability matrix and categorized service catalog;
+- five separate severity-colored finding sections, each with its own filter,
+  evidence, reason, remediation and source;
+- systems, raw services/processes, separately grouped listeners/connections,
+  and filesystem categories;
+- SSFS, tools, profiles and filesystem/ACL evidence;
+- an assessment map for the work that remains; and
+- explicit collection coverage and limitations.
+
+Technical inventories are collapsed into focused groups, and every table is
+inside a horizontally scrollable region so wide evidence remains usable on a
+small screen.
+
+The JSON contains the backward-compatible `risk_score`, `risk_grade` and
+`risk_label`, an executive `summary`, the five numeric `section_scores`, and
+the same evidence in stable top-level arrays: `findings`, `systems`,
+`services`, `processes`, `sockets`, `paths`, `ssfs`, `tools`, `profiles`,
+`coverage` and `assessment_catalog`. The additive `topology` object contains
+`database_posture`, `nodes`, `edges`, categorized `services`, `capabilities`
+and `databases`.
+
+Scoring is deterministic:
+
+| Severity | Points per unique rule/asset |
+|---|---:|
+| Critical | 30 |
+| High | 18 |
+| Medium | 8 |
+| Low | 3 |
+
+Each section total is capped independently at 100. The legacy aggregate is
+also retained and capped at 100 for existing automation. Grades are A (0–9),
+B (10–24), C (25–49), D (50–74) and F (75–100). Fixing one issue can remove
+several attack paths, while multiple findings can share one root cause; do
+not interpret any score as a percentage probability.
+
+An empty findings table does not mean the SAP landscape is secure. Read the
+assessment map and coverage section. SAP roles, business data, custom ABAP
+code, HANA database users, BTP controls, effective firewall reachability,
+negotiated TLS/SNC, product patch levels and organizational processes require
+separate authenticated or active validation.
+
+## Basic validation
+
+Before deployment, validate syntax and run a scoped local collection:
+
+```bash
+bash -n SAPaudit.sh
+./SAPaudit.sh --help
+./SAPaudit.sh --output-dir /tmp/sapstract-live
+jq '.schema, .risk_score, .coverage, .assessment_catalog' \
+  /tmp/sapstract-live/*.json
+```
+
+```powershell
+$null = [System.Management.Automation.Language.Parser]::ParseFile(
+  (Resolve-Path .\SAPaudit.ps1), [ref]$null, [ref]$parseErrors
+)
+$parseErrors
+.\SAPaudit.ps1 -OutputDirectory "$env:TEMP\sapstract-live"
+```
+
+## Research and rule maintenance
+
+The research snapshot intentionally separates:
+
+- safe host evidence that SAPstract can collect automatically;
+- inventory/context that must not be scored as a vulnerability by itself; and
+- active or authenticated assessment that requires authorization and a
+  change-controlled procedure.
+
+When adding a rule, require observable evidence, describe the security impact,
+give a safe remediation, and cite a primary SAP source or the exact CBAS
+project.
+
+## License
+
+The host-audit repository files are GPL-3.0; see [LICENSE](LICENSE). The
+independently licensed Python SSFS component remains MIT; see
+[python/LICENSE](python/LICENSE). MIT is GPL-compatible, and preserving the
+subtree license keeps redistribution terms explicit.

@@ -1,0 +1,7 @@
+include LICENSE
+include CHANGELOG.md
+include README.md
+include src/sapstract/py.typed
+recursive-include docs *.md
+global-exclude __pycache__
+global-exclude *.py[cod]
